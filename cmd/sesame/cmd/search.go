@@ -6,7 +6,7 @@ package cmd
 
 import (
 	"fmt"
-
+	
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +21,12 @@ var searchCmd = &cobra.Command{
 	Long: `If you have a "Nickname" tag on your host search using that.
 
 If you don't have the default tag name then you can provide it.`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 {
+			return fmt.Errorf("unexpected argument [%s]", args[0] )
+		}
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("search called: [%s: %s]\n", tag, nickname)
 		
