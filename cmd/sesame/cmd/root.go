@@ -1,7 +1,3 @@
-/*
-Copyright © 2022 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
@@ -11,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const DEFAULT_AWS_REGION = "us-east-1"
+const DefaultAwsRegion = "us-east-1"
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -47,8 +43,10 @@ func init() {
 func getAwsRegion() string {
 	awsRegion := os.Getenv("AWS_REGION")
 	if awsRegion == "" {
-		awsRegion = DEFAULT_AWS_REGION
+		awsRegion = DefaultAwsRegion
 	}
-	fmt.Fprintf(os.Stderr, "AWS region: [%s]\n", awsRegion)
+	_, err := fmt.Fprintf(os.Stderr, "AWS region: [%s]\n", awsRegion)
+	if err != nil {
+	}
 	return awsRegion
 }

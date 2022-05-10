@@ -1,7 +1,3 @@
-/*
-Copyright © 2022 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
@@ -43,7 +39,9 @@ If you don't have the default tag name then you can provide it.`,
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Fprintf(os.Stderr, "search called: [%s: %s]\n", tag, nickname)
+		_, err := fmt.Fprintf(os.Stderr, "search called: [%s: %s]\n", tag, nickname)
+		if err != nil {
+		}
 		if len(nickname) == 0 {
 			exitOnError(fmt.Errorf("tag cannot be empty %s:%s", tag, nickname))
 		}
@@ -61,15 +59,14 @@ If you don't have the default tag name then you can provide it.`,
 			},
 		}
 
-		const API_MIN = 5
-		maxRes := int64(API_MIN)
+		const ApiMin = 5
+		maxRes := int64(ApiMin)
 		input := &ssm.DescribeInstanceInformationInput{
-			Filters: filters,
-			//InstanceInformationFilterList: nil,
+			Filters:    filters,
 			MaxResults: &maxRes,
 		}
-		res, svcerr := svc.DescribeInstanceInformation(input)
-		exitOnError(svcerr)
+		res, serviceError := svc.DescribeInstanceInformation(input)
+		exitOnError(serviceError)
 		if len(res.InstanceInformationList) > 1 {
 			exitOnError(&SesameError{msg: "Too many results for tag."})
 
@@ -78,7 +75,9 @@ If you don't have the default tag name then you can provide it.`,
 		} else {
 			for _, item := range res.InstanceInformationList {
 
-				fmt.Fprintln(os.Stdout, *item.InstanceId)
+				_, err := fmt.Fprintln(os.Stdout, *item.InstanceId)
+				if err != nil {
+				}
 			}
 		}
 	},
@@ -86,7 +85,9 @@ If you don't have the default tag name then you can provide it.`,
 
 func exitOnError(err error) {
 	if err != nil {
-		fmt.Fprintln(os.Stdout, err)
+		_, err := fmt.Fprintln(os.Stdout, err)
+		if err != nil {
+		}
 		os.Exit(1)
 	}
 }
@@ -105,6 +106,9 @@ func init() {
 	searchCmd.Flags().StringVarP(&nickname, "nickname", "n", "", "Provide the value (or name) to search SSM hosts by tag value. See additional flag for your custom tag key.")
 	searchCmd.Flags().StringVarP(&tag, "tag", "t", "Nickname", "Provide the value of a tag name to search SSM hosts by tag value.")
 
-	rootCmd.MarkFlagRequired("nickname")
+	err := rootCmd.MarkFlagRequired("nickname")
+	if err != nil {
+		return
+	}
 
 }
