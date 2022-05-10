@@ -17,5 +17,17 @@ Tasks that should be simplerererrrr...
        go run cmd/sesame/main.go search -n DrStrange 2> /dev/null
        mi-01d856ea25bf2f111
        ``` 
-3. I issued an operation (run, automation) against a tag set filter, how did it go for a host I know by nickname? 
-4. 
+2. Track the process on all hosts of an automation run
+   1. Lets say you issued a start-automation-execution like so ... 
+      ```
+      aws ssm start-automation-execution --document-name ### --document-version "##" --target-parameter-name InstanceIds --targets '###' \
+          --parameters "###" --max-errors "0" --max-concurrency "1" --region us-gov-west-1
+      ```
+      You woul get back something like ... 
+      ```
+          {
+               "AutomationExecutionId": "a675cc50-8ded-4da5-b599-6f844df2b059"
+          }
+      ```
+      Track that progress for X amount of seconds or until success.
+3. I issued an operation (run, automation) against a tag set filter, how did it go for a host I know by nickname?
