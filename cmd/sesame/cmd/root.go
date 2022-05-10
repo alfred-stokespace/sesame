@@ -5,6 +5,7 @@ Copyright © 2022 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -45,8 +46,9 @@ func init() {
 
 func getAwsRegion() string {
 	awsRegion := os.Getenv("AWS_REGION")
-	if awsRegion != "" {
-		return awsRegion
+	if awsRegion == "" {
+		awsRegion = DEFAULT_AWS_REGION
 	}
-	return DEFAULT_AWS_REGION
+	fmt.Fprintf(os.Stderr, "AWS region: [%s]\n", awsRegion)
+	return awsRegion
 }

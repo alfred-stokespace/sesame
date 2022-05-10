@@ -14,6 +14,18 @@ import (
 	"runtime/debug"
 )
 
+type SesameError struct {
+	msg         string
+	reportStack bool
+}
+
+func (m *SesameError) Error() string {
+	if m.reportStack {
+		debug.PrintStack()
+	}
+	return m.msg
+}
+
 var nickname string
 var tag string
 
@@ -31,7 +43,7 @@ If you don't have the default tag name then you can provide it.`,
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("search called: [%s: %s]\n", tag, nickname)
+		fmt.Fprintf(os.Stderr, "search called: [%s: %s]\n", tag, nickname)
 		if len(nickname) == 0 {
 			exitOnError(fmt.Errorf("tag cannot be empty %s:%s", tag, nickname))
 		}
@@ -59,15 +71,21 @@ If you don't have the default tag name then you can provide it.`,
 		res, svcerr := svc.DescribeInstanceInformation(input)
 		exitOnError(svcerr)
 		if len(res.InstanceInformationList) > 1 {
-			exitOnError(fmt.Errorf("Too many results for tag."))
+			exitOnError(&SesameError{msg: "Too many results for tag."})
 
+		} else if len(res.InstanceInformationList) == 0 {
+			exitOnError(&SesameError{msg: "No results for tag."})
+		} else {
+			for _, item := range res.InstanceInformationList {
+
+				fmt.Fprintln(os.Stdout, *item.InstanceId)
+			}
 		}
 	},
 }
 
 func exitOnError(err error) {
 	if err != nil {
-		debug.PrintStack()
 		fmt.Fprintln(os.Stdout, err)
 		os.Exit(1)
 	}

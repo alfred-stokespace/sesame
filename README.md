@@ -10,5 +10,12 @@ SSM is a powerful product offering. However, it makes some tasks very difficult.
 
 Tasks that should be simplerererrrr...
 1. I know my on-prem (or EC2) host by a nickname, I want to operate on it by using it's nickname.
-2. I issued an operation (run, automation) against a tag set filter, how did it go for a host I know by nickname? 
-3. 
+    2. ```
+       export AWS_PROFILE=your-profile
+       export AWS_REGION=us-west-2
+       
+       go run cmd/sesame/main.go search -n DrStrange 2> /dev/null
+       mi-01d856ea25bf2f111
+       ``` 
+3. I issued an operation (run, automation) against a tag set filter, how did it go for a host I know by nickname? 
+4. 
