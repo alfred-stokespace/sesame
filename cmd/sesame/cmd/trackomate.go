@@ -37,7 +37,7 @@ var trackomateCmd = &cobra.Command{
 func (trackomate *Trackomate) thingDo() {
 	key := "ExecutionId"
 	filters := []*ssm.AutomationExecutionFilter{
-		&ssm.AutomationExecutionFilter{
+		{
 			Key: &key,
 			Values: []*string{
 				&automationExecutionId,
