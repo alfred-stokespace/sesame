@@ -10,13 +10,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-
+const DEFAULT_AWS_REGION = "us-east-1"
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "sesame",
 	Short: "A brief description of your application",
-	Long: `Sesame makes simple actions simple for AWS simple systems manager.`,
+	Long:  `Sesame makes simple actions simple for AWS simple systems manager.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	//Run: func(cmd *cobra.Command, args []string) { },
@@ -43,4 +43,10 @@ func init() {
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
-
+func getAwsRegion() string {
+	awsRegion := os.Getenv("AWS_REGION")
+	if awsRegion != "" {
+		return awsRegion
+	}
+	return DEFAULT_AWS_REGION
+}
