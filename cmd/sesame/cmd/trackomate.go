@@ -60,6 +60,13 @@ func (trackomate *Trackomate) thingDo() {
 			_, err := fmt.Fprintln(os.Stdout, *item.AutomationExecutionStatus)
 			if err != nil {
 			}
+			// Next steps, 
+			// - poll for status changes
+			//   - expecting to see a better library then https://stackoverflow.com/questions/16903348/scheduled-polling-task-in-go
+			//   - maybe https://github.com/madflojo/tasks
+			//   - maybe https://github.com/reugn/go-quartz/blob/master/examples/main.go
+			// - follow data structure down to individual host level status
+			// - display a table of status for each target.
 		}
 	}
 }
