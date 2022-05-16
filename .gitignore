@@ -5,6 +5,9 @@
 *.so
 *.dylib
 
+# Your private AWS env vars
+*.configureaws.sh
+
 # Test binary, built with `go test -c`
 *.test
 
