@@ -9,9 +9,12 @@ import (
 )
 
 var automationExecutionId string
+const ApiMax = 50
+const maxRecords = int64(ApiMax)
 
 type Trackomate struct {
 	SSMCommand
+	MaxRecords int64
 }
 
 // trackomateCmd represents the trackomate command
@@ -28,19 +31,18 @@ var trackomateCmd = &cobra.Command{
 			exitOnError(&SesameError{msg: "id cannot be empty "})
 		}
 
-		t := Trackomate{SSMCommand{}}
+		t := Trackomate{SSMCommand{}, maxRecords}
 		t.conf()
 		t.thingDo()
 	},
 }
 
-func (trackomate *Trackomate) thingDo() {
+func (trackomate *Trackomate) checkParent(checkOnce bool) bool {
 	filters := getParent()
-	const ApiMax = 50
-	maxRecords := int64(ApiMax)
+	
 	input := ssm.DescribeAutomationExecutionsInput{
 		Filters:    filters,
-		MaxResults: &maxRecords,
+		MaxResults: &trackomate.MaxRecords,
 	}
 	res, serviceError := trackomate.svc.DescribeAutomationExecutions(&input)
 	exitOnError(serviceError)
@@ -51,15 +53,27 @@ func (trackomate *Trackomate) thingDo() {
 
 			_, err := fmt.Fprintln(os.Stdout, *item.AutomationExecutionStatus)
 			if err != nil {
+				isSuccess := *item.AutomationExecutionStatus != ssm.AutomationExecutionStatusSuccess  
+				if isSuccess {
+					return isSuccess
+				} 
+				if checkOnce {
+					return isSuccess
+				}
+				// go async until end state or max timeout. 
 			}
 
 		}
 	}
 
+	return false
+}
+
+func (trackomate *Trackomate) checkChildren() {
 	childFilters := getFirstLevelChildren()
 	childrenInput := ssm.DescribeAutomationExecutionsInput{
 		Filters:    childFilters,
-		MaxResults: &maxRecords,
+		MaxResults: &trackomate.MaxRecords,
 	}
 	resChildren, childrenServiceError := trackomate.svc.DescribeAutomationExecutions(&childrenInput)
 	exitOnError(childrenServiceError)
@@ -74,6 +88,27 @@ func (trackomate *Trackomate) thingDo() {
 
 		}
 	}
+}
+
+func (trackomate *Trackomate) thingDo() {
+
+// sync check if parent exists
+// if success, no reason to go async
+// if absent, error
+// if non-success, go async
+//   async - 
+//     check children in 2 sec loop
+//     exit on failure
+
+	succeeded := trackomate.checkParent(true)
+	// non-existent would have aborted, we have a valid id!
+	if succeeded {
+		_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", automationExecutionId)
+		exitOnError(err)
+	}
+	
+
+    trackomate.checkChildren()
 }
 
 func getParent() []*ssm.AutomationExecutionFilter {
