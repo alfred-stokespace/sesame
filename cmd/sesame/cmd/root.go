@@ -47,6 +47,7 @@ func getAwsRegion() string {
 	}
 	_, err := fmt.Fprintf(os.Stderr, "AWS region: [%s]\n", awsRegion)
 	if err != nil {
+		panic(err)
 	}
 	return awsRegion
 }

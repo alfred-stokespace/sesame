@@ -23,6 +23,7 @@ func exitOnError(err error) {
 	if err != nil {
 		_, err := fmt.Fprintln(os.Stdout, err)
 		if err != nil {
+			panic(err)
 		}
 		os.Exit(1)
 	}
