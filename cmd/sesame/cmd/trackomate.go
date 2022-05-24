@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const ApiMax = 50
+
 var automationExecutionId string
 
 type Trackomate struct {
@@ -35,27 +37,12 @@ var trackomateCmd = &cobra.Command{
 }
 
 func (trackomate *Trackomate) thingDo() {
-	filters := getParent()
-	const ApiMax = 50
+	checkParent(trackomate)
+	checkChildren(trackomate)
+}
+
+func checkChildren(trackomate *Trackomate) {
 	maxRecords := int64(ApiMax)
-	input := ssm.DescribeAutomationExecutionsInput{
-		Filters:    filters,
-		MaxResults: &maxRecords,
-	}
-	res, serviceError := trackomate.svc.DescribeAutomationExecutions(&input)
-	exitOnError(serviceError)
-	if len(res.AutomationExecutionMetadataList) == 0 {
-		exitOnError(&SesameError{msg: "No results for execution id."})
-	} else {
-		for _, item := range res.AutomationExecutionMetadataList {
-
-			_, err := fmt.Fprintln(os.Stdout, *item.AutomationExecutionStatus)
-			if err != nil {
-			}
-
-		}
-	}
-
 	childFilters := getFirstLevelChildren()
 	childrenInput := ssm.DescribeAutomationExecutionsInput{
 		Filters:    childFilters,
@@ -74,6 +61,29 @@ func (trackomate *Trackomate) thingDo() {
 
 		}
 	}
+}
+
+func checkParent(trackomate *Trackomate) int64 {
+	filters := getParent()
+	maxRecords := int64(ApiMax)
+	input := ssm.DescribeAutomationExecutionsInput{
+		Filters:    filters,
+		MaxResults: &maxRecords,
+	}
+	res, serviceError := trackomate.svc.DescribeAutomationExecutions(&input)
+	exitOnError(serviceError)
+	if len(res.AutomationExecutionMetadataList) == 0 {
+		exitOnError(&SesameError{msg: "No results for execution id."})
+	} else {
+		for _, item := range res.AutomationExecutionMetadataList {
+
+			_, err := fmt.Fprintln(os.Stdout, *item.AutomationExecutionStatus)
+			if err != nil {
+			}
+
+		}
+	}
+	return maxRecords
 }
 
 func getParent() []*ssm.AutomationExecutionFilter {

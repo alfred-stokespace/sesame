@@ -23,7 +23,7 @@ Tasks that should be simplerererrrr...
       aws ssm start-automation-execution --document-name ### --document-version "##" --target-parameter-name InstanceIds --targets '###' \
           --parameters "###" --max-errors "0" --max-concurrency "1" --region us-gov-west-1
       ```
-      You woul get back something like ... 
+      You would get back something like ... 
       ```
           {
                "AutomationExecutionId": "a675cc50-8ded-4da5-b599-6f844df2b059"
@@ -31,3 +31,14 @@ Tasks that should be simplerererrrr...
       ```
       Track that progress for X amount of seconds or until success.
 3. I issued an operation (run, automation) against a tag set filter, how did it go for a host I know by nickname?
+
+
+# Examples
+
+**Track automation execution:** 
+>   ```
+>   # Assume AWS_PROFILE & AWS_REGION are both set
+>   
+>   go run cmd/sesame/main.go trackomate -i 04ef1a4a-6ca6-4cf3-9011-93b8343ddc18
+>   ```
+
