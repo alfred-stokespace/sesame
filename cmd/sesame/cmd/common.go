@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/spf13/cobra"
@@ -46,10 +47,20 @@ type SSMCommand struct {
 }
 
 func (ssmCommand *SSMCommand) conf() {
-	config := &aws.Config{Region: aws.String(getAwsRegion())}
-	sess, err := session.NewSession()
+	profile := getAwsProfile()
+	config := &aws.Config{
+		Region:                        aws.String(getAwsRegion()),
+		CredentialsChainVerboseErrors: aws.Bool(true),
+		Credentials:                   credentials.NewSharedCredentials("", profile),
+	}
+
+	sess, err := session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+		Config:            *config,
+		Profile:           profile,
+	})
 	exitOnError(err)
-	ssmCommand.svc = ssm.New(sess, config)
+	ssmCommand.svc = ssm.New(sess)
 }
 
 func (ssmCommand *SSMCommand) thingDo() {
