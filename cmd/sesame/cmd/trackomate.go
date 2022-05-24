@@ -18,8 +18,9 @@ const maxRecords = int64(ApiMax)
 
 type Trackomate struct {
 	SSMCommand
-	MaxRecords int64
+	maxRecords int64
 	reportChan *chan string
+	scheduler  *tasks.Scheduler
 }
 
 // trackomateCmd represents the trackomate command
@@ -38,18 +39,38 @@ var trackomateCmd = &cobra.Command{
 		}
 
 		reportChan := make(chan string, 10)
-		t := Trackomate{SSMCommand{}, maxRecords, &reportChan}
+		t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New()}
 		t.conf()
 		t.thingDo()
 	},
 }
 
-func (trackomate *Trackomate) checkParent(checkOnce bool) bool {
+func (trackomate *Trackomate) scheduleParent() string {
+	// Add a task
+	parentCheckId, err := trackomate.scheduler.Add(&tasks.Task{
+		Interval: time.Duration(2 * time.Second),
+		TaskFunc: func() error {
+			succeeded := trackomate.checkParent()
+			*trackomate.reportChan <- "Ran"
+			// non-existent would have aborted, we have a valid id!
+			if succeeded {
+				_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", automationExecutionId)
+				exitOnError(err)
+			}
+			return nil
+		},
+	})
+	exitOnError(err)
+	fmt.Printf(" parentCheckId: %s\n", parentCheckId)
+	return parentCheckId
+}
+
+func (trackomate *Trackomate) checkParent() bool {
 	filters := getParent()
 
 	input := ssm.DescribeAutomationExecutionsInput{
 		Filters:    filters,
-		MaxResults: &trackomate.MaxRecords,
+		MaxResults: &trackomate.maxRecords,
 	}
 	res, serviceError := trackomate.svc.DescribeAutomationExecutions(&input)
 	exitOnError(serviceError)
@@ -65,23 +86,36 @@ func (trackomate *Trackomate) checkParent(checkOnce bool) bool {
 			// go async until end state or max timeout.
 
 			isSuccess := *item.AutomationExecutionStatus == ssm.AutomationExecutionStatusSuccess
-			if checkOnce {
-				return isSuccess
-			}
 			if !isSuccess {
-				return isSuccess
+				trackomate.scheduleParent()
+				trackomate.scheduleChildren()
 			}
+			return isSuccess
 		}
 	}
 
 	return false
 }
 
+func (trackomate *Trackomate) scheduleChildren() string {
+	childCheckId, err := trackomate.scheduler.Add(&tasks.Task{
+		Interval: time.Duration(2 * time.Second),
+		TaskFunc: func() error {
+			trackomate.checkChildren()
+			*trackomate.reportChan <- "child ran"
+			return nil
+		},
+	})
+	exitOnError(err)
+	fmt.Printf(" ChildCheckId: %s\n", childCheckId)
+	return childCheckId
+}
+
 func (trackomate *Trackomate) checkChildren() {
 	childFilters := getFirstLevelChildren()
 	childrenInput := ssm.DescribeAutomationExecutionsInput{
 		Filters:    childFilters,
-		MaxResults: &trackomate.MaxRecords,
+		MaxResults: &trackomate.maxRecords,
 	}
 	resChildren, childrenServiceError := trackomate.svc.DescribeAutomationExecutions(&childrenInput)
 	exitOnError(childrenServiceError)
@@ -90,11 +124,10 @@ func (trackomate *Trackomate) checkChildren() {
 	} else {
 		for _, item := range resChildren.AutomationExecutionMetadataList {
 
-			_, err := fmt.Fprintf(os.Stdout, "child: %s, status: %s\n", *item.Target, *item.AutomationExecutionStatus)
+			_, err := fmt.Fprintf(os.Stdout, "CHILD: instanceId[%s], status: %s\n", *item.Target, *item.AutomationExecutionStatus)
 			if err != nil {
 				panic(err)
 			}
-
 		}
 	}
 }
@@ -112,46 +145,18 @@ func (trackomate *Trackomate) thingDo() {
 	//     exit on failure
 
 	// TODO: checkonce means that checkParent has control over scheduling, you can't also do scheduling down below.
-	succeeded := trackomate.checkParent(true)
+	succeeded := trackomate.checkParent()
 	// non-existent would have aborted, we have a valid id!
 	if succeeded {
-		_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", automationExecutionId)
+		_, err := fmt.Fprintf(os.Stdout, "PARENT: automation-id=[%s]: Success!\n", automationExecutionId)
 		exitOnError(err)
+		trackomate.checkChildren()
 	}
 
 	if !succeeded {
 		// Start the Scheduler
-		scheduler := tasks.New()
-		defer scheduler.Stop()
 
-		// Add a task
-		parentCheckId, err := scheduler.Add(&tasks.Task{
-			Interval: time.Duration(2 * time.Second),
-			TaskFunc: func() error {
-				succeeded := trackomate.checkParent(false)
-				*trackomate.reportChan <- "Ran"
-				// non-existent would have aborted, we have a valid id!
-				if succeeded {
-					_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", automationExecutionId)
-					exitOnError(err)
-				}
-				return nil
-			},
-		})
-		exitOnError(err)
-		fmt.Printf("%s", parentCheckId)
-
-		childCheckId, err := scheduler.Add(&tasks.Task{
-			Interval: time.Duration(2 * time.Second),
-			TaskFunc: func() error {
-				trackomate.checkChildren()
-				*trackomate.reportChan <- "child ran"
-				return nil
-			},
-		})
-		exitOnError(err)
-		fmt.Printf("%s", childCheckId)
-
+		defer trackomate.scheduler.Stop()
 		x := 20
 		for i := 1; i < x-1; i++ {
 			fmt.Println("Checking..")
@@ -160,7 +165,7 @@ func (trackomate *Trackomate) thingDo() {
 			fmt.Printf("REPORT: %s \n", report)
 		}
 		fmt.Println("Stopping")
-		scheduler.Del(parentCheckId)
+		//		trackomate.scheduler.Del(parentCheckId)
 	}
 }
 
