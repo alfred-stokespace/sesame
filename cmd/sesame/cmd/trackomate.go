@@ -123,13 +123,30 @@ func (trackomate *Trackomate) checkChildren() {
 		exitOnError(&SesameError{msg: "No results for execution id."})
 	} else {
 		for _, item := range resChildren.AutomationExecutionMetadataList {
-
-			_, err := fmt.Fprintf(os.Stdout, "CHILD: instanceId[%s], status: %s\n", *item.Target, *item.AutomationExecutionStatus)
+			name := trackomate.getTagValue(item, "Name")
+			_, err := fmt.Fprintf(os.Stdout, " CHILD: %s[%s], what: %s: %s\n", name, *item.Target, *item.DocumentName, *item.AutomationExecutionStatus)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
+}
+
+func (trackomate *Trackomate) getTagValue(item *ssm.AutomationExecutionMetadata, tagName string) string {
+	managedInstance := "ManagedInstance"
+	tagList := ssm.ListTagsForResourceInput{
+		ResourceId:   item.Target,
+		ResourceType: &managedInstance,
+	}
+	tags, tagError := trackomate.svc.ListTagsForResource(&tagList)
+	exitOnError(tagError)
+	var name = ""
+	for _, v := range tags.TagList {
+		if *v.Key == tagName {
+			name = *v.Value
+		}
+	}
+	return name
 }
 
 func (trackomate *Trackomate) thingDo() {
