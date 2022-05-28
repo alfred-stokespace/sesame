@@ -8,6 +8,7 @@ import (
 )
 
 const DefaultAwsRegion = "us-east-1"
+const DefaultProfile = "default"
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -47,6 +48,19 @@ func getAwsRegion() string {
 	}
 	_, err := fmt.Fprintf(os.Stderr, "AWS region: [%s]\n", awsRegion)
 	if err != nil {
+		panic(err)
 	}
 	return awsRegion
+}
+
+func getAwsProfile() string {
+	awsProfile := os.Getenv("AWS_PROFILE")
+	if awsProfile == "" {
+		awsProfile = DefaultProfile
+	}
+	_, err := fmt.Fprintf(os.Stderr, "AWS profile: [%s]\n", awsProfile)
+	if err != nil {
+		panic(err)
+	}
+	return awsProfile
 }

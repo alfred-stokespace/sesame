@@ -26,6 +26,7 @@ If you don't have the default tag name then you can provide it.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		_, err := fmt.Fprintf(os.Stderr, "search called: [%s: %s]\n", tag, nickname)
 		if err != nil {
+			panic(err)
 		}
 		if len(nickname) == 0 {
 			exitOnError(fmt.Errorf("tag cannot be empty %s:%s", tag, nickname))
@@ -64,6 +65,7 @@ func (search *Search) thingDo() {
 
 			_, err := fmt.Fprintln(os.Stdout, *item.InstanceId)
 			if err != nil {
+				panic(err)
 			}
 		}
 	}
