@@ -79,7 +79,7 @@ func (trackomate *Trackomate) checkParent() bool {
 	} else {
 		for _, item := range res.AutomationExecutionMetadataList {
 
-			_, err := fmt.Fprintf(os.Stdout, "Parent status: %s\n", *item.AutomationExecutionStatus)
+			_, err := fmt.Fprintf(os.Stdout, "Parent document: [%s]\n", *item.DocumentName)
 			if err != nil {
 				exitOnError(err)
 			}
@@ -123,7 +123,7 @@ func (trackomate *Trackomate) checkChildren() {
 		exitOnError(&SesameError{msg: "No results for execution id."})
 	} else {
 		for _, item := range resChildren.AutomationExecutionMetadataList {
-			name := trackomate.getTagValue(item, "Name")
+			name := trackomate.getManagedInstanceTagValue(item, "Name")
 			_, err := fmt.Fprintf(os.Stdout, " CHILD: %s[%s], what: %s: %s\n", name, *item.Target, *item.DocumentName, *item.AutomationExecutionStatus)
 			if err != nil {
 				panic(err)
@@ -132,7 +132,7 @@ func (trackomate *Trackomate) checkChildren() {
 	}
 }
 
-func (trackomate *Trackomate) getTagValue(item *ssm.AutomationExecutionMetadata, tagName string) string {
+func (trackomate *Trackomate) getManagedInstanceTagValue(item *ssm.AutomationExecutionMetadata, tagName string) string {
 	managedInstance := "ManagedInstance"
 	tagList := ssm.ListTagsForResourceInput{
 		ResourceId:   item.Target,
