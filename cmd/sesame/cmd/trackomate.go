@@ -157,7 +157,12 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 				execs.allComplete = false
 				execs.incomplete = append(execs.incomplete, *item.Target)
 			}
-			_, err := fmt.Fprintf(os.Stdout, " CHILD: %s[%s], what: %s: %s %s\n", name, *item.Target, *item.DocumentName, *item.AutomationExecutionStatus, *item.FailureMessage)
+			fm := item.FailureMessage
+			if fm == nil {
+				none := ""
+				fm = &none
+			}
+			_, err := fmt.Fprintf(os.Stdout, " CHILD: %s[%s], what: %s: %s %s\n", name, *item.Target, *item.DocumentName, *item.AutomationExecutionStatus, *fm)
 			if err != nil {
 				panic(err)
 			}
