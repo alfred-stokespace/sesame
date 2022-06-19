@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/spf13/cobra"
@@ -51,7 +50,6 @@ func (ssmCommand *SSMCommand) conf() {
 	config := &aws.Config{
 		Region:                        aws.String(getAwsRegion()),
 		CredentialsChainVerboseErrors: aws.Bool(true),
-		Credentials:                   credentials.NewSharedCredentials("", profile),
 	}
 
 	sess, err := session.NewSessionWithOptions(session.Options{
