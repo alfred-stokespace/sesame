@@ -50,7 +50,7 @@ var trackomateCmd = &cobra.Command{
 func (trackomate *Trackomate) scheduleParent() string {
 	// Add a task
 	parentCheckId, err := trackomate.scheduler.Add(&tasks.Task{
-		Interval: time.Duration(2 * time.Second),
+		Interval: 2 * time.Second,
 		TaskFunc: func() error {
 			succeeded := trackomate.checkParent()
 			if !succeeded {
@@ -106,8 +106,18 @@ func (trackomate *Trackomate) isSuccess(item *ssm.AutomationExecutionMetadata) b
 	return isSuccess
 }
 
+func (trackomate *Trackomate) getStatusColor(item *ssm.AutomationExecutionMetadata) string {
+	if trackomate.isSuccess(item) {
+		return "\033[32m" + *item.AutomationExecutionStatus + "\033[0m"
+	} else {
+		return "\033[31m" + *item.AutomationExecutionStatus + "\033[0m"
+	}
+}
+
 func (trackomate *Trackomate) isFailed(item *ssm.AutomationExecutionMetadata) bool {
-	isFailed := *item.AutomationExecutionStatus == ssm.AutomationExecutionStatusFailed
+	isFailed :=
+		*item.AutomationExecutionStatus == ssm.AutomationExecutionStatusFailed ||
+			*item.AutomationExecutionStatus == ssm.AutomationExecutionStatusTimedOut
 	return isFailed
 }
 func (trackomate *Trackomate) scheduleChildren() string {
@@ -162,7 +172,7 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 				none := ""
 				fm = &none
 			}
-			_, err := fmt.Fprintf(os.Stdout, " CHILD: %s[%s], what: %s: %s %s\n", name, *item.Target, *item.DocumentName, *item.AutomationExecutionStatus, *fm)
+			_, err := fmt.Fprintf(os.Stdout, " CHILD: what [%s]:[%s] %s[%s] : %s\n", *item.DocumentName, trackomate.getStatusColor(item), name, *item.Target, *fm)
 			if err != nil {
 				panic(err)
 			}
