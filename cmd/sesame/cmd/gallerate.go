@@ -46,6 +46,7 @@ var gallerateCmd = &cobra.Command{
 var filterTag string
 var filterTagName string
 var filterTagValue string
+var gal = Gallery{SSMCommand{}}
 
 type Gallery struct {
 	SSMCommand
@@ -59,6 +60,7 @@ func init() {
 		exitOnError(err)
 	}
 	rootCmd.AddCommand(gallerateCmd)
+	gal.conf()
 }
 
 func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter) error {
@@ -76,27 +78,32 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter) error {
 		Filters:    filters,
 		MaxResults: &maxRes,
 	}
-	res, serviceError := gallery.svc.DescribeInstanceInformation(input)
-	if serviceError != nil {
-		return serviceError
-	}
 
-	if len(res.InstanceInformationList) == 0 {
-		return &SesameError{msg: "No results for tag filter."}
-	} else {
-		for _, item := range res.InstanceInformationList {
-
-			_, err := fmt.Fprintln(ior, *item.InstanceId)
+	pageNum := 0
+	serviceError := gallery.svc.DescribeInstanceInformationPages(input, func(page *ssm.DescribeInstanceInformationOutput, lastPage bool) bool {
+		pageNum++
+		for _, value := range page.InstanceInformationList {
+			_, err := fmt.Fprintln(ior, *value.InstanceId)
 			if err != nil {
 				panic(err)
 			}
 		}
+		return !lastPage
+	})
+	if serviceError != nil {
+		return serviceError
+	}
+
+	if pageNum == 0 {
+		return &SesameError{msg: "No results for tag filter."}
 	}
 	return nil
 }
 
 func layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
+	//footerHeight := 30
+
 	if v, err := g.SetView("side", -1, -1, 30, maxY); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
@@ -105,9 +112,7 @@ func layout(g *gocui.Gui) error {
 		v.SelBgColor = gocui.ColorGreen
 		v.SelFgColor = gocui.ColorBlack
 
-		g := Gallery{SSMCommand{}}
-		g.conf()
-		err = g.thingDoWithTarget(v)
+		err = gal.thingDoWithTarget(v)
 		if err != nil {
 			fmt.Fprintln(v, err.Error())
 		}
@@ -124,6 +129,16 @@ func layout(g *gocui.Gui) error {
 			return err
 		}
 	}
+
+	//if v, err := g.SetView("footer", -1, maxY-footerHeight, maxX-1, footerHeight); err != nil {
+	//	if err != gocui.ErrUnknownView {
+	//		return err
+	//	}
+	//
+	//	fmt.Fprintf(v, "%s", "Footer")
+	//	v.Editable = false
+	//	v.Wrap = true
+	//}
 	return nil
 }
 
