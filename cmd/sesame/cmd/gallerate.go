@@ -41,6 +41,10 @@ var gallerateCmd = &cobra.Command{
 			log.Panicln(err)
 		}
 
+		if err := g.SetKeybinding("", gocui.KeyCtrlQ, gocui.ModNone, quit); err != nil {
+			log.Panicln(err)
+		}
+
 		if err := g.SetKeybinding("side", gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
 			log.Panicln(err)
 		}
@@ -120,7 +124,7 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter, ior2 io.ReadWriter)
 				panic(listTagServiceError)
 			}
 
-			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId}
+			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId, Status: *value.PingStatus}
 
 			aNamedThing.TagList = listTagsForResourceOutput.TagList
 			for _, tagV := range listTagsForResourceOutput.TagList {
@@ -190,7 +194,6 @@ func layout(g *gocui.Gui) error {
 			return err
 		}
 
-		fmt.Fprintf(v, "%s", "Hello")
 		v.Editable = false
 		v.Wrap = true
 	}
@@ -200,7 +203,6 @@ func layout(g *gocui.Gui) error {
 			return err
 		}
 
-		fmt.Fprintf(footer, "%s", "Footer")
 		footer.Editable = false
 		footer.Wrap = true
 	}
@@ -209,6 +211,7 @@ func layout(g *gocui.Gui) error {
 	}
 
 	if len(gal.instances) == 0 {
+		side.Clear()
 		return gal.thingDoWithTarget(side, footer)
 	}
 
@@ -229,6 +232,7 @@ func cursorDown(g *gocui.Gui, v *gocui.View) error {
 				return err
 			}
 		}
+		return changeMainView(g, v)
 	}
 	return nil
 }
@@ -243,6 +247,29 @@ func cursorUp(g *gocui.Gui, v *gocui.View) error {
 				return err
 			}
 		}
+		return changeMainView(g, v)
+	}
+	return nil
+}
+
+func changeMainView(g *gocui.Gui, v *gocui.View) error {
+	var b strings.Builder
+
+	if v, err := g.View("main"); err == nil {
+		v.Clear()
+		if sideSelectedNum >= len(gal.instances) {
+			return nil
+		}
+		fmt.Fprintf(&b, "PING STATUS:%s\n", gal.instances[sideSelectedNum].Status)
+		for _, t := range gal.instances[sideSelectedNum].TagList {
+			fmt.Fprintf(&b, "%s:\t%s\n", *t.Key, *t.Value)
+		}
+		_, erri := fmt.Fprintf(v, "%s", b.String())
+		if erri == nil {
+			return erri
+		}
+	} else {
+		return err
 	}
 	return nil
 }
