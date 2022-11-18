@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 	"io"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -46,16 +48,30 @@ var gallerateCmd = &cobra.Command{
 var filterTag string
 var filterTagName string
 var filterTagValue string
-var gal = Gallery{SSMCommand{}}
+var bestNameTag string
+var gal = Gallery{SSMCommand{}, []UsefullyNamed{}}
+
+type UsefullyNamed struct {
+	InstanceId string
+	Name       string
+	Status     string
+	TagList    []*ssm.Tag
+}
 
 type Gallery struct {
 	SSMCommand
+	instances []UsefullyNamed
 }
 
 func init() {
 
 	gallerateCmd.Flags().StringVarP(&filterTag, "filterTag", "t", "", "Provide a Tag key:value to filter the gallery.")
+	gallerateCmd.Flags().StringVarP(&bestNameTag, "bestNameTag", "n", "", "Provide a Tag key name that has the best value for a UI friendly name.")
 	err := gallerateCmd.MarkFlagRequired("filterTag")
+	if err != nil {
+		exitOnError(err)
+	}
+	err = gallerateCmd.MarkFlagRequired("bestNameTag")
 	if err != nil {
 		exitOnError(err)
 	}
@@ -63,7 +79,7 @@ func init() {
 	gal.conf()
 }
 
-func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter) error {
+func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter, ior2 io.ReadWriter) error {
 	// Create our filter slice
 	filters := []*ssm.InstanceInformationStringFilter{
 		{
@@ -80,13 +96,29 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter) error {
 	}
 
 	pageNum := 0
+	gallery.instances = []UsefullyNamed{}
 	serviceError := gallery.svc.DescribeInstanceInformationPages(input, func(page *ssm.DescribeInstanceInformationOutput, lastPage bool) bool {
 		pageNum++
 		for _, value := range page.InstanceInformationList {
-			_, err := fmt.Fprintln(ior, *value.InstanceId)
-			if err != nil {
-				panic(err)
+
+			tagInput := &ssm.ListTagsForResourceInput{
+				ResourceId:   value.InstanceId,
+				ResourceType: value.ResourceType,
 			}
+			listTagsForResourceOutput, listTagServiceError := gallery.svc.ListTagsForResource(tagInput)
+			if listTagServiceError != nil {
+				panic(listTagServiceError)
+			}
+
+			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId}
+
+			aNamedThing.TagList = listTagsForResourceOutput.TagList
+			for _, tagV := range listTagsForResourceOutput.TagList {
+				if bestNameTag == *tagV.Key {
+					aNamedThing.Name = *tagV.Value
+				}
+			}
+			gallery.instances = append(gallery.instances, aNamedThing)
 		}
 		return !lastPage
 	})
@@ -97,27 +129,53 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter) error {
 	if pageNum == 0 {
 		return &SesameError{msg: "No results for tag filter."}
 	}
+
+	sort.Slice(gallery.instances, func(i, j int) bool {
+		if gallery.instances[i].Name == "" && gallery.instances[j].Name != "" {
+			return false
+		} else if gallery.instances[i].Name != "" && gallery.instances[j].Name == "" {
+			return true
+		} else if gallery.instances[i].Name == "" && gallery.instances[j].Name == "" {
+			return true
+		}
+
+		return gallery.instances[i].Name < gallery.instances[j].Name
+	})
+	for _, value := range gallery.instances {
+		_, err := fmt.Fprintln(ior, value.InstanceId+"("+value.Name+")")
+		if err != nil {
+			panic(err)
+		}
+	}
+	_, err := fmt.Fprintln(ior2, "Total instance count: "+strconv.Itoa(len(gallery.instances)))
+	if err != nil {
+		panic(err)
+	}
 	return nil
 }
 
 func layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 	footerHeight := 5
-
-	if v, err := g.SetView("side", -1, -1, 30, maxY-footerHeight); err != nil {
+	minusFooter := maxY - footerHeight
+	if minusFooter < 0 {
+		minusFooter = maxY
+	}
+	const sideWidth = 40
+	side, err := g.SetView("side", -1, -1, sideWidth, minusFooter)
+	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Highlight = true
-		v.SelBgColor = gocui.ColorGreen
-		v.SelFgColor = gocui.ColorBlack
+		side.Highlight = true
+		side.SelBgColor = gocui.ColorGreen
+		side.SelFgColor = gocui.ColorBlack
 
-		err = gal.thingDoWithTarget(v)
 		if err != nil {
-			fmt.Fprintln(v, err.Error())
+			fmt.Fprintln(side, err.Error())
 		}
 	}
-	if v, err := g.SetView("main", 30, -1, maxX, maxY-footerHeight); err != nil {
+	if v, err := g.SetView("main", sideWidth, -1, maxX, minusFooter); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
@@ -129,16 +187,17 @@ func layout(g *gocui.Gui) error {
 			return err
 		}
 	}
-
-	if v, err := g.SetView("footer", -1, maxY-5, maxX, maxY); err != nil {
+	footer, err := g.SetView("footer", -1, maxY-5, maxX, maxY)
+	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
 
-		fmt.Fprintf(v, "%s", "Footer")
-		v.Editable = false
-		v.Wrap = true
+		fmt.Fprintf(footer, "%s", "Footer")
+		footer.Editable = false
+		footer.Wrap = true
 	}
+	err = gal.thingDoWithTarget(side, footer)
 	return nil
 }
 
