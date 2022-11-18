@@ -102,9 +102,9 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter) error {
 
 func layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
-	//footerHeight := 30
+	footerHeight := 5
 
-	if v, err := g.SetView("side", -1, -1, 30, maxY); err != nil {
+	if v, err := g.SetView("side", -1, -1, 30, maxY-footerHeight); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
@@ -117,7 +117,7 @@ func layout(g *gocui.Gui) error {
 			fmt.Fprintln(v, err.Error())
 		}
 	}
-	if v, err := g.SetView("main", 30, -1, maxX, maxY); err != nil {
+	if v, err := g.SetView("main", 30, -1, maxX, maxY-footerHeight); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
@@ -130,15 +130,15 @@ func layout(g *gocui.Gui) error {
 		}
 	}
 
-	//if v, err := g.SetView("footer", -1, maxY-footerHeight, maxX-1, footerHeight); err != nil {
-	//	if err != gocui.ErrUnknownView {
-	//		return err
-	//	}
-	//
-	//	fmt.Fprintf(v, "%s", "Footer")
-	//	v.Editable = false
-	//	v.Wrap = true
-	//}
+	if v, err := g.SetView("footer", -1, maxY-5, maxX, maxY); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+
+		fmt.Fprintf(v, "%s", "Footer")
+		v.Editable = false
+		v.Wrap = true
+	}
 	return nil
 }
 
