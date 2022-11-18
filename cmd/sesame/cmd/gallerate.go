@@ -33,9 +33,18 @@ var gallerateCmd = &cobra.Command{
 		}
 		defer g.Close()
 
+		g.Cursor = true
+
 		g.SetManagerFunc(layout)
 
 		if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+			log.Panicln(err)
+		}
+
+		if err := g.SetKeybinding("side", gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
+			log.Panicln(err)
+		}
+		if err := g.SetKeybinding("side", gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
 			log.Panicln(err)
 		}
 
@@ -50,6 +59,7 @@ var filterTagName string
 var filterTagValue string
 var bestNameTag string
 var gal = Gallery{SSMCommand{}, []UsefullyNamed{}}
+var sideSelectedNum = 0
 
 type UsefullyNamed struct {
 	InstanceId string
@@ -170,7 +180,7 @@ func layout(g *gocui.Gui) error {
 		side.Highlight = true
 		side.SelBgColor = gocui.ColorGreen
 		side.SelFgColor = gocui.ColorBlack
-
+		side.Editable = false
 		if err != nil {
 			fmt.Fprintln(side, err.Error())
 		}
@@ -183,9 +193,6 @@ func layout(g *gocui.Gui) error {
 		fmt.Fprintf(v, "%s", "Hello")
 		v.Editable = false
 		v.Wrap = true
-		if _, err := g.SetCurrentView("main"); err != nil {
-			return err
-		}
 	}
 	footer, err := g.SetView("footer", -1, maxY-5, maxX, maxY)
 	if err != nil {
@@ -197,10 +204,45 @@ func layout(g *gocui.Gui) error {
 		footer.Editable = false
 		footer.Wrap = true
 	}
-	err = gal.thingDoWithTarget(side, footer)
+	if _, err := g.SetCurrentView("side"); err != nil {
+		return err
+	}
+
+	if len(gal.instances) == 0 {
+		return gal.thingDoWithTarget(side, footer)
+	}
+
 	return nil
 }
 
 func quit(g *gocui.Gui, v *gocui.View) error {
 	return gocui.ErrQuit
+}
+
+func cursorDown(g *gocui.Gui, v *gocui.View) error {
+	sideSelectedNum++
+	if v != nil {
+		cx, cy := v.Cursor()
+		if err := v.SetCursor(cx, cy+1); err != nil {
+			ox, oy := v.Origin()
+			if err := v.SetOrigin(ox, oy+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func cursorUp(g *gocui.Gui, v *gocui.View) error {
+	sideSelectedNum--
+	if v != nil {
+		ox, oy := v.Origin()
+		cx, cy := v.Cursor()
+		if err := v.SetCursor(cx, cy-1); err != nil && oy > 0 {
+			if err := v.SetOrigin(ox, oy-1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
