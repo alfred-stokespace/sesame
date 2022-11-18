@@ -9,8 +9,8 @@ import (
 	"io"
 	"log"
 	"sort"
-	"strconv"
 	"strings"
+	"time"
 )
 
 var gallerateCmd = &cobra.Command{
@@ -45,6 +45,10 @@ var gallerateCmd = &cobra.Command{
 			log.Panicln(err)
 		}
 
+		if err := g.SetKeybinding("", gocui.KeyCtrlR, gocui.ModNone, refresh); err != nil {
+			log.Panicln(err)
+		}
+
 		if err := g.SetKeybinding("side", gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
 			log.Panicln(err)
 		}
@@ -62,7 +66,7 @@ var filterTag string
 var filterTagName string
 var filterTagValue string
 var bestNameTag string
-var gal = Gallery{SSMCommand{}, []UsefullyNamed{}}
+var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, ""}
 var sideSelectedNum = 0
 
 type UsefullyNamed struct {
@@ -70,11 +74,13 @@ type UsefullyNamed struct {
 	Name       string
 	Status     string
 	TagList    []*ssm.Tag
+	Everything ssm.InstanceInformation
 }
 
 type Gallery struct {
 	SSMCommand
-	instances []UsefullyNamed
+	Instances      []UsefullyNamed
+	TimeOfRetrieve string
 }
 
 func init() {
@@ -93,7 +99,7 @@ func init() {
 	gal.conf()
 }
 
-func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter, ior2 io.ReadWriter) error {
+func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView io.ReadWriter, footer io.ReadWriter) error {
 	// Create our filter slice
 	filters := []*ssm.InstanceInformationStringFilter{
 		{
@@ -110,9 +116,10 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter, ior2 io.ReadWriter)
 	}
 
 	pageNum := 0
-	gallery.instances = []UsefullyNamed{}
+	gallery.Instances = []UsefullyNamed{}
 	serviceError := gallery.svc.DescribeInstanceInformationPages(input, func(page *ssm.DescribeInstanceInformationOutput, lastPage bool) bool {
 		pageNum++
+		gallery.TimeOfRetrieve = time.Now().String()
 		for _, value := range page.InstanceInformationList {
 
 			tagInput := &ssm.ListTagsForResourceInput{
@@ -124,7 +131,7 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter, ior2 io.ReadWriter)
 				panic(listTagServiceError)
 			}
 
-			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId, Status: *value.PingStatus}
+			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId, Status: *value.PingStatus, Everything: *value}
 
 			aNamedThing.TagList = listTagsForResourceOutput.TagList
 			for _, tagV := range listTagsForResourceOutput.TagList {
@@ -132,7 +139,7 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter, ior2 io.ReadWriter)
 					aNamedThing.Name = *tagV.Value
 				}
 			}
-			gallery.instances = append(gallery.instances, aNamedThing)
+			gallery.Instances = append(gallery.Instances, aNamedThing)
 		}
 		return !lastPage
 	})
@@ -144,28 +151,47 @@ func (gallery *Gallery) thingDoWithTarget(ior io.ReadWriter, ior2 io.ReadWriter)
 		return &SesameError{msg: "No results for tag filter."}
 	}
 
-	sort.Slice(gallery.instances, func(i, j int) bool {
-		if gallery.instances[i].Name == "" && gallery.instances[j].Name != "" {
+	sort.Slice(gallery.Instances, func(i, j int) bool {
+		if gallery.Instances[i].Name == "" && gallery.Instances[j].Name != "" {
 			return false
-		} else if gallery.instances[i].Name != "" && gallery.instances[j].Name == "" {
+		} else if gallery.Instances[i].Name != "" && gallery.Instances[j].Name == "" {
 			return true
-		} else if gallery.instances[i].Name == "" && gallery.instances[j].Name == "" {
+		} else if gallery.Instances[i].Name == "" && gallery.Instances[j].Name == "" {
 			return true
 		}
 
-		return gallery.instances[i].Name < gallery.instances[j].Name
+		return gallery.Instances[i].Name < gallery.Instances[j].Name
 	})
-	for _, value := range gallery.instances {
-		_, err := fmt.Fprintln(ior, value.InstanceId+"("+value.Name+")")
+	for _, value := range gallery.Instances {
+
+		var pict = "\033[31;1m!\033[0m"
+		if value.Status == "Online" {
+			pict = "\033[32;1m^\033[0m"
+		}
+		_, err := fmt.Fprintln(inventoryView, pict+" "+value.InstanceId+"("+value.Name+")")
 		if err != nil {
 			panic(err)
 		}
 	}
-	_, err := fmt.Fprintln(ior2, "Total instance count: "+strconv.Itoa(len(gallery.instances)))
+	err := gallery.printFooter(footer)
+	if err != nil {
+		panic(err)
+	}
+	err = changeMainView(g, nil)
 	if err != nil {
 		panic(err)
 	}
 	return nil
+}
+
+func (gallery *Gallery) printFooter(footer io.ReadWriter) error {
+	_, err := fmt.Fprintf(footer, "Total instance count: %d @(%s)\n", len(gallery.Instances), gallery.TimeOfRetrieve)
+	if err == nil {
+		fmt.Fprintln(footer, "Ctrl+R => Refresh gallery")
+		fmt.Fprintln(footer, "Ctrl+Q => Quit")
+		fmt.Fprintln(footer, "UpArrow/DownArrow => Navigate gallery up/down")
+	}
+	return err
 }
 
 func layout(g *gocui.Gui) error {
@@ -210,9 +236,9 @@ func layout(g *gocui.Gui) error {
 		return err
 	}
 
-	if len(gal.instances) == 0 {
+	if len(gal.Instances) == 0 {
 		side.Clear()
-		return gal.thingDoWithTarget(side, footer)
+		return gal.thingDoWithTarget(g, side, footer)
 	}
 
 	return nil
@@ -257,16 +283,29 @@ func changeMainView(g *gocui.Gui, v *gocui.View) error {
 
 	if v, err := g.View("main"); err == nil {
 		v.Clear()
-		if sideSelectedNum >= len(gal.instances) {
+		if sideSelectedNum >= len(gal.Instances) {
 			return nil
 		}
-		fmt.Fprintf(&b, "PING STATUS:%s\n", gal.instances[sideSelectedNum].Status)
-		for _, t := range gal.instances[sideSelectedNum].TagList {
+		fmt.Fprintf(&b, "PING STATUS: %s (%s)\n", gal.Instances[sideSelectedNum].Status, gal.Instances[sideSelectedNum].Everything.LastPingDateTime)
+		for _, t := range gal.Instances[sideSelectedNum].TagList {
 			fmt.Fprintf(&b, "%s:\t%s\n", *t.Key, *t.Value)
 		}
 		_, erri := fmt.Fprintf(v, "%s", b.String())
 		if erri == nil {
 			return erri
+		}
+	} else {
+		return err
+	}
+	return nil
+}
+
+func refresh(g *gocui.Gui, v *gocui.View) error {
+	if v, err := g.View("side"); err == nil {
+		v.Clear()
+		if f, err := g.View("footer"); err == nil {
+			f.Clear()
+			return gal.thingDoWithTarget(g, v, f)
 		}
 	} else {
 		return err
