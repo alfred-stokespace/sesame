@@ -196,12 +196,19 @@ func (gallery *Gallery) printFooter(footer io.ReadWriter) error {
 
 func layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
+	const sideWidth = 40
+	if maxX <= 0 {
+		maxX = sideWidth * 2
+	}
+	if maxY <= 0 {
+		maxY = maxX
+	}
 	footerHeight := 5
 	minusFooter := maxY - footerHeight
 	if minusFooter < 0 {
 		minusFooter = maxY
 	}
-	const sideWidth = 40
+
 	side, err := g.SetView("side", -1, -1, sideWidth, minusFooter)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
@@ -285,6 +292,9 @@ func changeMainView(g *gocui.Gui, v *gocui.View) error {
 		v.Clear()
 		if sideSelectedNum >= len(gal.Instances) {
 			return nil
+		}
+		if sideSelectedNum < 0 {
+			sideSelectedNum = 0
 		}
 		fmt.Fprintf(&b, "PING STATUS: %s (%s)\n", gal.Instances[sideSelectedNum].Status, gal.Instances[sideSelectedNum].Everything.LastPingDateTime)
 		for _, t := range gal.Instances[sideSelectedNum].TagList {
