@@ -1,10 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 	"os"
 	"runtime/debug"
@@ -42,23 +42,18 @@ func (m *SesameError) Error() string {
 }
 
 type SSMCommand struct {
-	svc *ssm.SSM
+	svc *ssm.Client
 }
 
 func (ssmCommand *SSMCommand) conf() {
 	profile := getAwsProfile()
-	config := &aws.Config{
-		Region:                        aws.String(getAwsRegion()),
-		CredentialsChainVerboseErrors: aws.Bool(true),
-	}
-
-	sess, err := session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-		Config:            *config,
-		Profile:           profile,
-	})
+	conf, err := config.LoadDefaultConfig(
+		context.TODO(),
+		config.WithRegion(getAwsRegion()),
+		config.WithSharedConfigProfile(profile),
+	)
 	exitOnError(err)
-	ssmCommand.svc = ssm.New(sess)
+	ssmCommand.svc = ssm.NewFromConfig(conf)
 }
 
 func (ssmCommand *SSMCommand) thingDo() {

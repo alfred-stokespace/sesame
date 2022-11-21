@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
 	"os"
 )
@@ -40,20 +42,20 @@ If you don't have the default tag name then you can provide it.`,
 
 func (search *Search) thingDo() {
 	// Create our filter slice
-	filters := []*ssm.InstanceInformationStringFilter{
+	filters := []types.InstanceInformationStringFilter{
 		{
 			Key:    aws.String(fmt.Sprintf("tag:%s", tag)),
-			Values: aws.StringSlice([]string{nickname}),
+			Values: []string{nickname},
 		},
 	}
 
 	const ApiMin = 5
-	maxRes := int64(ApiMin)
+	maxRes := int32(ApiMin)
 	input := &ssm.DescribeInstanceInformationInput{
 		Filters:    filters,
 		MaxResults: &maxRes,
 	}
-	res, serviceError := search.svc.DescribeInstanceInformation(input)
+	res, serviceError := search.svc.DescribeInstanceInformation(context.Background(), input)
 	exitOnError(serviceError)
 	if len(res.InstanceInformationList) > 1 {
 		exitOnError(&SesameError{msg: "Too many results for tag."})

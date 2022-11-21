@@ -1,9 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/jroimartin/gocui"
 	"github.com/spf13/cobra"
 	"io"
@@ -73,8 +74,8 @@ type UsefullyNamed struct {
 	InstanceId string
 	Name       string
 	Status     string
-	TagList    []*ssm.Tag
-	Everything ssm.InstanceInformation
+	TagList    []types.Tag
+	Everything types.InstanceInformation
 }
 
 type Gallery struct {
@@ -101,15 +102,16 @@ func init() {
 
 func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.View, footer *gocui.View) error {
 	// Create our filter slice
-	filters := []*ssm.InstanceInformationStringFilter{
+	k := fmt.Sprintf("tag:%s", filterTagName)
+	filters := []types.InstanceInformationStringFilter{
 		{
-			Key:    aws.String(fmt.Sprintf("tag:%s", filterTagName)),
-			Values: aws.StringSlice([]string{filterTagValue}),
+			Key:    &k,
+			Values: []string{filterTagValue},
 		},
 	}
 
 	const ApiMin = 50
-	maxRes := int64(ApiMin)
+	maxRes := int32(ApiMin)
 	input := &ssm.DescribeInstanceInformationInput{
 		Filters:    filters,
 		MaxResults: &maxRes,
@@ -117,21 +119,27 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.Vie
 
 	pageNum := 0
 	gallery.Instances = []UsefullyNamed{}
-	serviceError := gallery.svc.DescribeInstanceInformationPages(input, func(page *ssm.DescribeInstanceInformationOutput, lastPage bool) bool {
+	pager := ssm.NewDescribeInstanceInformationPaginator(gallery.svc, input, func(o *ssm.DescribeInstanceInformationPaginatorOptions) {})
+
+	for pager.HasMorePages() {
+		page, err := pager.NextPage(context.Background())
+		if err != nil {
+			panic(err)
+		}
 		pageNum++
 		gallery.TimeOfRetrieve = time.Now().String()
 		for _, value := range page.InstanceInformationList {
 
 			tagInput := &ssm.ListTagsForResourceInput{
 				ResourceId:   value.InstanceId,
-				ResourceType: value.ResourceType,
+				ResourceType: types.ResourceTypeForTagging(value.ResourceType),
 			}
-			listTagsForResourceOutput, listTagServiceError := gallery.svc.ListTagsForResource(tagInput)
+			listTagsForResourceOutput, listTagServiceError := gallery.svc.ListTagsForResource(context.Background(), tagInput)
 			if listTagServiceError != nil {
 				panic(listTagServiceError)
 			}
 
-			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId, Status: *value.PingStatus, Everything: *value}
+			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId, Status: string(value.PingStatus), Everything: value}
 
 			aNamedThing.TagList = listTagsForResourceOutput.TagList
 			for _, tagV := range listTagsForResourceOutput.TagList {
@@ -141,10 +149,7 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.Vie
 			}
 			gallery.Instances = append(gallery.Instances, aNamedThing)
 		}
-		return !lastPage
-	})
-	if serviceError != nil {
-		return serviceError
+
 	}
 
 	if pageNum == 0 {

@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/madflojo/tasks"
 
 	"github.com/spf13/cobra"
@@ -14,11 +16,11 @@ import (
 var automationExecutionId string
 
 const ApiMax = 50
-const maxRecords = int64(ApiMax)
+const maxRecords = int32(ApiMax)
 
 type Trackomate struct {
 	SSMCommand
-	maxRecords          int64
+	maxRecords          int32
 	reportChan          *chan string
 	scheduler           *tasks.Scheduler
 	parentSchedulerId   string
@@ -76,14 +78,14 @@ func (trackomate *Trackomate) checkParent() bool {
 		Filters:    filters,
 		MaxResults: &trackomate.maxRecords,
 	}
-	res, serviceError := trackomate.svc.DescribeAutomationExecutions(&input)
+	res, serviceError := trackomate.svc.DescribeAutomationExecutions(context.Background(), &input)
 	exitOnError(serviceError)
 	if len(res.AutomationExecutionMetadataList) == 0 {
 		exitOnError(&SesameError{msg: "No results for execution id."})
 	} else {
 		for _, item := range res.AutomationExecutionMetadataList {
 
-			_, err := fmt.Fprintf(os.Stdout, "Parent document: %s [%s]\n", *item.AutomationExecutionStatus, *item.DocumentName)
+			_, err := fmt.Fprintf(os.Stdout, "Parent document: %s [%s]\n", item.AutomationExecutionStatus, *item.DocumentName)
 			if err != nil {
 				exitOnError(err)
 			}
@@ -101,23 +103,23 @@ func (trackomate *Trackomate) checkParent() bool {
 	return false
 }
 
-func (trackomate *Trackomate) isSuccess(item *ssm.AutomationExecutionMetadata) bool {
-	isSuccess := *item.AutomationExecutionStatus == ssm.AutomationExecutionStatusSuccess
+func (trackomate *Trackomate) isSuccess(item types.AutomationExecutionMetadata) bool {
+	isSuccess := item.AutomationExecutionStatus == types.AutomationExecutionStatusSuccess
 	return isSuccess
 }
 
-func (trackomate *Trackomate) getStatusColor(item *ssm.AutomationExecutionMetadata) string {
+func (trackomate *Trackomate) getStatusColor(item types.AutomationExecutionMetadata) string {
 	if trackomate.isSuccess(item) {
-		return "\033[32m" + *item.AutomationExecutionStatus + "\033[0m"
+		return "\033[32m" + string(item.AutomationExecutionStatus) + "\033[0m"
 	} else {
-		return "\033[31m" + *item.AutomationExecutionStatus + "\033[0m"
+		return "\033[31m" + string(item.AutomationExecutionStatus) + "\033[0m"
 	}
 }
 
-func (trackomate *Trackomate) isFailed(item *ssm.AutomationExecutionMetadata) bool {
+func (trackomate *Trackomate) isFailed(item types.AutomationExecutionMetadata) bool {
 	isFailed :=
-		*item.AutomationExecutionStatus == ssm.AutomationExecutionStatusFailed ||
-			*item.AutomationExecutionStatus == ssm.AutomationExecutionStatusTimedOut
+		item.AutomationExecutionStatus == types.AutomationExecutionStatusFailed ||
+			item.AutomationExecutionStatus == types.AutomationExecutionStatusTimedout
 	return isFailed
 }
 func (trackomate *Trackomate) scheduleChildren() string {
@@ -135,11 +137,11 @@ func (trackomate *Trackomate) scheduleChildren() string {
 
 func (trackomate *Trackomate) checkChildren(executionId string) {
 	childFilters := getFirstLevelChildren(executionId)
-	childrenInput := ssm.DescribeAutomationExecutionsInput{
+	childrenInput := &ssm.DescribeAutomationExecutionsInput{
 		Filters:    childFilters,
 		MaxResults: &trackomate.maxRecords,
 	}
-	resChildren, childrenServiceError := trackomate.svc.DescribeAutomationExecutions(&childrenInput)
+	resChildren, childrenServiceError := trackomate.svc.DescribeAutomationExecutions(context.Background(), childrenInput)
 	exitOnError(childrenServiceError)
 	if len(resChildren.AutomationExecutionMetadataList) == 0 {
 		exitOnError(&SesameError{msg: "No results for execution id."})
@@ -153,7 +155,7 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 		execs := Executions{}
 		execs.allComplete = true
 		for _, item := range resChildren.AutomationExecutionMetadataList {
-			name := trackomate.getManagedInstanceTagValue(item, "Name")
+			name := trackomate.getManagedInstanceTagValue(&item, "Name")
 			outs := item.Outputs
 			for s, k := range outs {
 				fmt.Fprintf(os.Stdout, "%s:%v", s, k)
@@ -185,13 +187,12 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 	}
 }
 
-func (trackomate *Trackomate) getManagedInstanceTagValue(item *ssm.AutomationExecutionMetadata, tagName string) string {
-	managedInstance := "ManagedInstance"
+func (trackomate *Trackomate) getManagedInstanceTagValue(item *types.AutomationExecutionMetadata, tagName string) string {
 	tagList := ssm.ListTagsForResourceInput{
 		ResourceId:   item.Target,
-		ResourceType: &managedInstance,
+		ResourceType: types.ResourceTypeForTaggingManagedInstance,
 	}
-	tags, tagError := trackomate.svc.ListTagsForResource(&tagList)
+	tags, tagError := trackomate.svc.ListTagsForResource(context.Background(), &tagList)
 	exitOnError(tagError)
 	var name = ""
 	for _, v := range tags.TagList {
@@ -250,26 +251,26 @@ func (trackomate *Trackomate) thingDo() {
 	}
 }
 
-func getParent() []*ssm.AutomationExecutionFilter {
+func getParent() []types.AutomationExecutionFilter {
 	key := "ExecutionId"
-	filters := []*ssm.AutomationExecutionFilter{
+	filters := []types.AutomationExecutionFilter{
 		{
-			Key: &key,
-			Values: []*string{
-				&automationExecutionId,
+			Key: types.AutomationExecutionFilterKey(key),
+			Values: []string{
+				automationExecutionId,
 			},
 		},
 	}
 	return filters
 }
 
-func getFirstLevelChildren(executionId string) []*ssm.AutomationExecutionFilter {
+func getFirstLevelChildren(executionId string) []types.AutomationExecutionFilter {
 	key := "ParentExecutionId"
-	filters := []*ssm.AutomationExecutionFilter{
+	filters := []types.AutomationExecutionFilter{
 		{
-			Key: &key,
-			Values: []*string{
-				&executionId,
+			Key: types.AutomationExecutionFilterKey(key),
+			Values: []string{
+				executionId,
 			},
 		},
 	}
