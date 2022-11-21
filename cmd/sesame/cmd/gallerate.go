@@ -99,7 +99,7 @@ func init() {
 	gal.conf()
 }
 
-func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView io.ReadWriter, footer io.ReadWriter) error {
+func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.View, footer *gocui.View) error {
 	// Create our filter slice
 	filters := []*ssm.InstanceInformationStringFilter{
 		{
@@ -162,6 +162,7 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView io.ReadWri
 
 		return gallery.Instances[i].Name < gallery.Instances[j].Name
 	})
+	inventoryView.Clear()
 	for _, value := range gallery.Instances {
 
 		var pict = "\033[31;1m!\033[0m"
@@ -173,6 +174,7 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView io.ReadWri
 			panic(err)
 		}
 	}
+	footer.Clear()
 	err := gallery.printFooter(footer)
 	if err != nil {
 		panic(err)
@@ -187,8 +189,8 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView io.ReadWri
 func (gallery *Gallery) printFooter(footer io.ReadWriter) error {
 	_, err := fmt.Fprintf(footer, "Total instance count: %d @(%s)\n", len(gallery.Instances), gallery.TimeOfRetrieve)
 	if err == nil {
-		fmt.Fprintln(footer, "Ctrl+R => Refresh gallery")
-		fmt.Fprintln(footer, "Ctrl+Q => Quit")
+		fmt.Fprintln(footer, "Ctrl+r => Refresh gallery")
+		fmt.Fprintln(footer, "Ctrl+q => Quit")
 		fmt.Fprintln(footer, "UpArrow/DownArrow => Navigate gallery up/down")
 	}
 	return err
@@ -218,6 +220,7 @@ func layout(g *gocui.Gui) error {
 		side.SelBgColor = gocui.ColorGreen
 		side.SelFgColor = gocui.ColorBlack
 		side.Editable = false
+		fmt.Fprintf(side, "Initilizing...")
 		if err != nil {
 			fmt.Fprintln(side, err.Error())
 		}
@@ -229,6 +232,7 @@ func layout(g *gocui.Gui) error {
 
 		v.Editable = false
 		v.Wrap = true
+		fmt.Fprintf(v, "Initilizing...")
 	}
 	footer, err := g.SetView("footer", -1, maxY-5, maxX, maxY)
 	if err != nil {
@@ -238,14 +242,14 @@ func layout(g *gocui.Gui) error {
 
 		footer.Editable = false
 		footer.Wrap = true
+		fmt.Fprintf(footer, "Initilizing...")
 	}
 	if _, err := g.SetCurrentView("side"); err != nil {
 		return err
 	}
 
 	if len(gal.Instances) == 0 {
-		side.Clear()
-		return gal.thingDoWithTarget(g, side, footer)
+		go backGroundUpdate(g)
 	}
 
 	return nil
@@ -313,12 +317,27 @@ func changeMainView(g *gocui.Gui, v *gocui.View) error {
 func refresh(g *gocui.Gui, v *gocui.View) error {
 	if v, err := g.View("side"); err == nil {
 		v.Clear()
+		fmt.Fprintln(v, "Refreshing...")
 		if f, err := g.View("footer"); err == nil {
 			f.Clear()
-			return gal.thingDoWithTarget(g, v, f)
+			fmt.Fprintln(f, "Refreshing...")
+			go backGroundUpdate(g)
 		}
 	} else {
 		return err
 	}
 	return nil
+}
+
+func backGroundUpdate(g *gocui.Gui) {
+	g.Update(func(g *gocui.Gui) error {
+		if v, err := g.View("side"); err == nil {
+			if f, err := g.View("footer"); err == nil {
+				gal.thingDoWithTarget(g, v, f)
+			}
+		} else {
+			return err
+		}
+		return nil
+	})
 }
