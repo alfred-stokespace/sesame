@@ -232,7 +232,7 @@ func layout(g *gocui.Gui) error {
 
 		v.Editable = false
 		v.Wrap = true
-		fmt.Fprintf(v, "Initilizing...")
+		fmt.Fprintf(v, "Initializing...")
 	}
 	footer, err := g.SetView("footer", -1, maxY-5, maxX, maxY)
 	if err != nil {
