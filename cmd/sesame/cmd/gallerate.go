@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"io"
 	"log"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -50,6 +52,10 @@ var gallerateCmd = &cobra.Command{
 			log.Panicln(err)
 		}
 
+		if err := g.SetKeybinding("", gocui.KeyCtrlS, gocui.ModNone, ssmStart); err != nil {
+			log.Panicln(err)
+		}
+
 		if err := g.SetKeybinding("side", gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
 			log.Panicln(err)
 		}
@@ -60,6 +66,34 @@ var gallerateCmd = &cobra.Command{
 		if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 			log.Panicln(err)
 		}
+
+		// clear the screen todo: this doesn't work for windows
+		fmt.Print("\033[H\033[2J")
+
+		// in this case the user exited, we should not start up again
+		if gal.openSsmSessionTo != "" {
+			fmt.Println("Attempting SSM Session open")
+			const insideThisProjectsStandardDockerContainer = "/usr/local/bin/ssmcli"
+
+			if _, err := os.Stat(insideThisProjectsStandardDockerContainer); os.IsNotExist(err) {
+				cmd := exec.Command("/usr/local/bin/aws", "ssm", "start-session", "--target", fmt.Sprintf("%s", gal.openSsmSessionTo))
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				cmd.Stdin = os.Stdin
+				if err := cmd.Run(); err != nil {
+					log.Fatal(err)
+				}
+			} else {
+				cmd := exec.Command(insideThisProjectsStandardDockerContainer, "start-session", "--instance-id", fmt.Sprintf("%s", gal.openSsmSessionTo))
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				cmd.Stdin = os.Stdin
+				if err := cmd.Run(); err != nil {
+					log.Fatal(err)
+				}
+			}
+			gal.openSsmSessionTo = ""
+		}
 	},
 }
 
@@ -67,7 +101,7 @@ var filterTag string
 var filterTagName string
 var filterTagValue string
 var bestNameTag string
-var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, ""}
+var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, "", ""}
 var sideSelectedNum = 0
 
 type UsefullyNamed struct {
@@ -80,8 +114,9 @@ type UsefullyNamed struct {
 
 type Gallery struct {
 	SSMCommand
-	Instances      []UsefullyNamed
-	TimeOfRetrieve string
+	Instances        []UsefullyNamed
+	TimeOfRetrieve   string
+	openSsmSessionTo string
 }
 
 func init() {
@@ -194,8 +229,8 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.Vie
 func (gallery *Gallery) printFooter(footer io.ReadWriter) error {
 	_, err := fmt.Fprintf(footer, "Total instance count: %d @(%s)\n", len(gallery.Instances), gallery.TimeOfRetrieve)
 	if err == nil {
-		fmt.Fprintln(footer, "Ctrl+r => Refresh gallery")
-		fmt.Fprintln(footer, "Ctrl+q => Quit")
+		fmt.Fprintln(footer, "Ctrl+r => Refresh gallery | Ctrl+s => SSM Session Open")
+		fmt.Fprintln(footer, "Ctrl+q => Quit            | Ctrl+c => Quit")
 		fmt.Fprintln(footer, "UpArrow/DownArrow => Navigate gallery up/down")
 	}
 	return err
@@ -332,6 +367,19 @@ func refresh(g *gocui.Gui, v *gocui.View) error {
 		return err
 	}
 	return nil
+}
+
+func ssmStart(g *gocui.Gui, v *gocui.View) error {
+	// Before we issue the quit command lets capture which host the user selected and prepare for ssm
+	if sideSelectedNum >= len(gal.Instances) {
+		return nil
+	}
+	if sideSelectedNum < 0 {
+		sideSelectedNum = 0
+	}
+	gal.openSsmSessionTo = gal.Instances[sideSelectedNum].InstanceId
+
+	return gocui.ErrQuit
 }
 
 func backGroundUpdate(g *gocui.Gui) {
