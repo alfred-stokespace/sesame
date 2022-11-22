@@ -1,4 +1,4 @@
-module github.com/alfred-stokespace/sesame
+module github.com/Heraclitus/sesame
 
 go 1.16
 
