@@ -14,7 +14,9 @@ import (
 )
 
 var automationExecutionId string
+var maxPollCount int
 
+const DefaultPendingPollCount = 40
 const ApiMax = 50
 const maxRecords = int32(ApiMax)
 
@@ -54,15 +56,17 @@ func (trackomate *Trackomate) scheduleParent() string {
 	parentCheckId, err := trackomate.scheduler.Add(&tasks.Task{
 		Interval: 2 * time.Second,
 		TaskFunc: func() error {
-			succeeded := trackomate.checkParent()
-			if !succeeded {
-				*trackomate.reportChan <- "Failed"
-				_, err := fmt.Fprintf(os.Stdout, "[%s]: Faled!\n", automationExecutionId)
-				exitOnError(err)
-			} else {
-				*trackomate.reportChan <- "Succeeded"
-				_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", automationExecutionId)
-				exitOnError(err)
+			endState := trackomate.checkParent()
+			if endState.IsEndState {
+				if endState.IsEndStateSuccess {
+					*trackomate.reportChan <- "Succeeded"
+					_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", automationExecutionId)
+					exitOnError(err)
+				} else {
+					*trackomate.reportChan <- "Failed"
+					_, err := fmt.Fprintf(os.Stdout, "[%s]: Faled!\n", automationExecutionId)
+					exitOnError(err)
+				}
 			}
 			return nil
 		},
@@ -71,7 +75,13 @@ func (trackomate *Trackomate) scheduleParent() string {
 	return parentCheckId
 }
 
-func (trackomate *Trackomate) checkParent() bool {
+type ComplexStatus struct {
+	IsEndState        bool
+	IsEndStateSuccess bool
+	InternalStatus    string
+}
+
+func (trackomate *Trackomate) checkParent() ComplexStatus {
 	filters := getParent()
 
 	input := ssm.DescribeAutomationExecutionsInput{
@@ -80,6 +90,7 @@ func (trackomate *Trackomate) checkParent() bool {
 	}
 	res, serviceError := trackomate.svc.DescribeAutomationExecutions(context.Background(), &input)
 	exitOnError(serviceError)
+	cState := ComplexStatus{IsEndState: true, IsEndStateSuccess: false}
 	if len(res.AutomationExecutionMetadataList) == 0 {
 		exitOnError(&SesameError{msg: "No results for execution id."})
 	} else {
@@ -89,39 +100,187 @@ func (trackomate *Trackomate) checkParent() bool {
 			if err != nil {
 				exitOnError(err)
 			}
-			isSuccess := trackomate.isSuccess(item)
-			isFailed := trackomate.isFailed(item)
-			if isFailed || isSuccess {
+
+			isCompleted, isSuccess := trackomate.isCompletedStatus(item)
+
+			cState := ComplexStatus{IsEndState: isCompleted, IsEndStateSuccess: isSuccess}
+
+			if isCompleted {
 				if trackomate.parentSchedulerId != "" {
 					trackomate.scheduler.Del(trackomate.parentSchedulerId)
 				}
+				cState.IsEndState = true
+				cState.IsEndStateSuccess = isSuccess
+			} else if trackomate.isPendingStatus(item) {
+				cState.InternalStatus = string(item.AutomationExecutionStatus)
+				cState.IsEndState = false
+			} else {
+				// this should only happen if AWS adds a status we didn't account for, or we have a bug!
+				cState.IsEndState = true
+				cState.IsEndStateSuccess = false
 			}
-			return isSuccess
+			return cState
 		}
 	}
 
-	return false
+	return cState
 }
 
-func (trackomate *Trackomate) isSuccess(item types.AutomationExecutionMetadata) bool {
-	isSuccess := item.AutomationExecutionStatus == types.AutomationExecutionStatusSuccess
-	return isSuccess
+// Which ones are considered success?
+// - From services/ssm/types/enums.go
+//AutomationExecutionStatusPending                        AutomationExecutionStatus = "Pending"
+//AutomationExecutionStatusInprogress                     AutomationExecutionStatus = "InProgress"
+//AutomationExecutionStatusWaiting                        AutomationExecutionStatus = "Waiting"
+//AutomationExecutionStatusSuccess                        AutomationExecutionStatus = "Success"
+//AutomationExecutionStatusTimedout                       AutomationExecutionStatus = "TimedOut"
+//AutomationExecutionStatusCancelling                     AutomationExecutionStatus = "Cancelling"
+//AutomationExecutionStatusCancelled                      AutomationExecutionStatus = "Cancelled"
+//AutomationExecutionStatusFailed                         AutomationExecutionStatus = "Failed"
+//AutomationExecutionStatusPendingApproval                AutomationExecutionStatus = "PendingApproval"
+//AutomationExecutionStatusApproved                       AutomationExecutionStatus = "Approved"
+//AutomationExecutionStatusRejected                       AutomationExecutionStatus = "Rejected"
+//AutomationExecutionStatusScheduled                      AutomationExecutionStatus = "Scheduled"
+//AutomationExecutionStatusRunbookInprogress              AutomationExecutionStatus = "RunbookInProgress"
+//AutomationExecutionStatusPendingChangeCalendarOverride  AutomationExecutionStatus = "PendingChangeCalendarOverride"
+//AutomationExecutionStatusChangeCalendarOverrideApproved AutomationExecutionStatus = "ChangeCalendarOverrideApproved"
+//AutomationExecutionStatusChangeCalendarOverrideRejected AutomationExecutionStatus = "ChangeCalendarOverrideRejected"
+//AutomationExecutionStatusCompletedWithSuccess           AutomationExecutionStatus = "CompletedWithSuccess"
+//AutomationExecutionStatusCompletedWithFailure           AutomationExecutionStatus = "CompletedWithFailure"
+//
+// AWS Doesn't seem to have methods for categorizing statuses, so we have add that.
+//             /- Succeeded =====================================
+//            /           - AutomationExecutionStatusCompletedWithSuccess
+// completed =            - AutomationExecutionStatusSuccess
+//             \- Failed    ======================================
+//                        - AutomationExecutionStatusTimedout
+//                        - AutomationExecutionStatusCancelled
+//                        - AutomationExecutionStatusFailed
+//                        - AutomationExecutionStatusRejected
+//                        - AutomationExecutionStatusCompletedWithFailure
+//
+// pending =   ======================
+//           - AutomationExecutionStatusPending
+//           - AutomationExecutionStatusInprogress
+//           - AutomationExecutionStatusWaiting
+//           - AutomationExecutionStatusCancelling
+//           - AutomationExecutionStatusPendingApproval
+//           - AutomationExecutionStatusApproved
+//           - AutomationExecutionStatusScheduled
+//           - AutomationExecutionStatusRunbookInprogress
+//           - AutomationExecutionStatusPendingChangeCalendarOverride
+//           - AutomationExecutionStatusChangeCalendarOverrideApproved
+//           - AutomationExecutionStatusChangeCalendarOverrideRejected
+//
+
+func (trackomate *Trackomate) isCompletedStatus(item types.AutomationExecutionMetadata) (bool, bool) {
+	isCompleted := false
+	isSuccess := false
+	switch status := item.AutomationExecutionStatus; status {
+	case types.AutomationExecutionStatusCompletedWithSuccess:
+		{
+			isCompleted = true
+			isSuccess = true
+		}
+	case types.AutomationExecutionStatusSuccess:
+		{
+			isCompleted = true
+			isSuccess = true
+		}
+	case types.AutomationExecutionStatusTimedout:
+		{
+			isCompleted = true
+			isSuccess = false
+		}
+	case types.AutomationExecutionStatusCancelled:
+		{
+			isCompleted = true
+			isSuccess = false
+		}
+	case types.AutomationExecutionStatusFailed:
+		{
+			isCompleted = true
+			isSuccess = false
+		}
+	case types.AutomationExecutionStatusRejected:
+		{
+			isCompleted = true
+			isSuccess = false
+		}
+	case types.AutomationExecutionStatusCompletedWithFailure:
+		{
+			isCompleted = true
+			isSuccess = false
+		}
+	}
+	return isCompleted, isSuccess
+}
+
+func (trackomate *Trackomate) isPendingStatus(item types.AutomationExecutionMetadata) bool {
+	isPending := false
+	switch status := item.AutomationExecutionStatus; status {
+	case types.AutomationExecutionStatusPending:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusInprogress:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusWaiting:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusCancelling:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusPendingApproval:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusApproved:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusRunbookInprogress:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusPendingChangeCalendarOverride:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusChangeCalendarOverrideApproved:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusChangeCalendarOverrideRejected:
+		{
+			isPending = true
+		}
+	case types.AutomationExecutionStatusScheduled:
+		{
+			isPending = true
+		}
+	}
+	return isPending
 }
 
 func (trackomate *Trackomate) getStatusColor(item types.AutomationExecutionMetadata) string {
-	if trackomate.isSuccess(item) {
+	isCompleted, isSuccess := trackomate.isCompletedStatus(item)
+	if !isCompleted {
+		// yellow
+		return "\033[33m" + string(item.AutomationExecutionStatus) + "\033[0m"
+	}
+	if isSuccess {
+		// green
 		return "\033[32m" + string(item.AutomationExecutionStatus) + "\033[0m"
 	} else {
+		// red
 		return "\033[31m" + string(item.AutomationExecutionStatus) + "\033[0m"
 	}
 }
 
-func (trackomate *Trackomate) isFailed(item types.AutomationExecutionMetadata) bool {
-	isFailed :=
-		item.AutomationExecutionStatus == types.AutomationExecutionStatusFailed ||
-			item.AutomationExecutionStatus == types.AutomationExecutionStatusTimedout
-	return isFailed
-}
 func (trackomate *Trackomate) scheduleChildren() string {
 	childCheckId, err := trackomate.scheduler.Add(&tasks.Task{
 		Interval: time.Duration(2 * time.Second),
@@ -160,24 +319,33 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 			for s, k := range outs {
 				fmt.Fprintf(os.Stdout, "%s:%v", s, k)
 			}
-			if trackomate.isSuccess(item) {
-				execs.succeeded = append(execs.succeeded, *item.Target)
-				//TODO: May or may not have children run commands
-			} else if trackomate.isFailed(item) {
-				execs.failed = append(execs.failed, *item.Target)
+			isCompleted, isSuccess := trackomate.isCompletedStatus(item)
+			if isCompleted {
+				if isSuccess {
+					execs.succeeded = append(execs.succeeded, *item.Target)
+					//TODO: May or may not have children run commands
+				} else {
+					execs.failed = append(execs.failed, *item.Target)
+				}
+				fm := item.FailureMessage
+				if fm == nil {
+					none := ""
+					fm = &none
+					// fmt.Sprintf("%s,%s", item.CurrentAction, item.CurrentStepName)
+				}
+				_, err := fmt.Fprintf(os.Stdout, " CHILD: what [%s]:[%s] %s[%s] : %s\n", *item.DocumentName, trackomate.getStatusColor(item), name, *item.Target, *fm)
+				if err != nil {
+					panic(err)
+				}
 			} else {
 				execs.allComplete = false
 				execs.incomplete = append(execs.incomplete, *item.Target)
+				_, err := fmt.Fprintf(os.Stdout, " CHILD: what [%s]:[%s] %s[%s] : %s\n", *item.DocumentName, trackomate.getStatusColor(item), name, *item.Target, "pending")
+				if err != nil {
+					panic(err)
+				}
 			}
-			fm := item.FailureMessage
-			if fm == nil {
-				none := ""
-				fm = &none
-			}
-			_, err := fmt.Fprintf(os.Stdout, " CHILD: what [%s]:[%s] %s[%s] : %s\n", *item.DocumentName, trackomate.getStatusColor(item), name, *item.Target, *fm)
-			if err != nil {
-				panic(err)
-			}
+
 		}
 
 		if execs.allComplete {
@@ -208,30 +376,31 @@ func (trackomate *Trackomate) thingDo() {
 	// sync check if parent exists
 	// if success, no reason to go async
 	// if absent, error (exit)
-	// if non-success, go async
+	// if non-endstate, go async
 	//   async -
 	//     check parent in 2 sec loop
 	//     check children in 2 sec loop
 	//     report status from either parent or child
 	//     exit on failure
 
-	succeeded := trackomate.checkParent()
-	if !succeeded {
+	endState := trackomate.checkParent()
+	if !endState.IsEndState {
 		trackomate.parentSchedulerId = trackomate.scheduleParent()
 		trackomate.childrenSchedulerId = trackomate.scheduleChildren()
 	}
-	// non-existent would have aborted, we have a valid id!
-	if succeeded {
+
+	if endState.IsEndState && endState.IsEndStateSuccess {
 		_, err := fmt.Fprintf(os.Stdout, "PARENT: automation-id=[%s]: Success!\n", automationExecutionId)
 		exitOnError(err)
 		trackomate.checkChildren(automationExecutionId)
 	}
 
-	if !succeeded {
+	if !endState.IsEndState {
 		// Start the Scheduler
 
 		defer trackomate.scheduler.Stop()
-		x := 20
+
+		x := DefaultPendingPollCount
 		for i := 1; i < x-1; i++ {
 			if len(trackomate.scheduler.Tasks()) > 0 {
 				fmt.Println("Checking..")
@@ -281,6 +450,7 @@ func init() {
 	rootCmd.AddCommand(trackomateCmd)
 
 	trackomateCmd.Flags().StringVarP(&automationExecutionId, "id", "i", "", "Provide the AutomationExecutionId from an ssm start-automation-execution command")
+	trackomateCmd.Flags().IntVarP(&maxPollCount, "maxPollCount", "p", DefaultPendingPollCount, fmt.Sprintf("Provide a number of times to poll for pending tasks before giving up. Default: %d", DefaultPendingPollCount))
 
 	err := trackomateCmd.MarkFlagRequired("id")
 	if err != nil {
