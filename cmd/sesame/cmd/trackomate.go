@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/madflojo/tasks"
@@ -331,15 +332,16 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 				if fm == nil {
 					none := ""
 					fm = &none
-					// fmt.Sprintf("%s,%s", item.CurrentAction, item.CurrentStepName)
 				}
 				_, err := fmt.Fprintf(os.Stdout, " CHILD: what [%s]:[%s] %s[%s] : %s\n", *item.DocumentName, trackomate.getStatusColor(item), name, *item.Target, *fm)
 				if err != nil {
 					panic(err)
 				}
+				trackomate.getStepExecutions(&item)
 			} else {
 				execs.allComplete = false
 				execs.incomplete = append(execs.incomplete, *item.Target)
+				trackomate.getStepExecutions(&item)
 				_, err := fmt.Fprintf(os.Stdout, " CHILD: what [%s]:[%s] %s[%s] : %s\n", *item.DocumentName, trackomate.getStatusColor(item), name, *item.Target, "pending")
 				if err != nil {
 					panic(err)
@@ -417,6 +419,51 @@ func (trackomate *Trackomate) thingDo() {
 			}
 		}
 		fmt.Println("Stopping")
+	}
+}
+
+func (trackomate *Trackomate) getStepExecutions(item *types.AutomationExecutionMetadata) {
+	reverse := true
+	stepsInput := ssm.DescribeAutomationStepExecutionsInput{
+		AutomationExecutionId: item.AutomationExecutionId,
+		ReverseOrder:          &reverse,
+	}
+
+	steps, err := trackomate.svc.DescribeAutomationStepExecutions(context.Background(), &stepsInput)
+	exitOnError(err)
+	if len(steps.StepExecutions) == 0 {
+		return
+	} else {
+		for _, s := range steps.StepExecutions {
+			fmt.Printf(" CHILD: StepName:%s, Status:%s, execId:%s\n", *s.StepName, s.StepStatus, *s.StepExecutionId)
+		}
+	}
+	getStepInput := ssm.GetAutomationExecutionInput{
+		AutomationExecutionId: item.AutomationExecutionId,
+	}
+	stepForCommand, notherErr := trackomate.svc.GetAutomationExecution(context.Background(), &getStepInput)
+	exitOnError(notherErr)
+	for _, se := range stepForCommand.AutomationExecution.StepExecutions {
+		for _, commandId := range se.Outputs["CommandId"] {
+			instanceIdInputWithFormating := se.Inputs["InstanceIds"]
+			instanceIdInputs := strings.Replace(strings.Replace(instanceIdInputWithFormating, "\"]", "", -1), "[\"", "", -1)
+			listCommandInput := ssm.ListCommandInvocationsInput{
+				CommandId:  &commandId,
+				InstanceId: &instanceIdInputs,
+				Details:    true,
+			}
+			commandInvs, moreErr := trackomate.svc.ListCommandInvocations(context.Background(), &listCommandInput)
+			exitOnError(moreErr)
+			for _, commandInv := range commandInvs.CommandInvocations {
+				for _, commandPlugins := range commandInv.CommandPlugins {
+					if commandPlugins.Output != nil && *commandPlugins.Output == "" {
+						fmt.Printf(" CHILD[%s:%s]: output: -empty-\n", *commandPlugins.Name, commandId)
+					} else if commandPlugins.Output != nil {
+						fmt.Printf(" CHILD[%s:%s]: output: \n\t%s\n", *commandPlugins.Name, commandId, strings.Replace(*commandPlugins.Output, "\n", "\n\t", -1))
+					}
+				}
+			}
+		}
 	}
 }
 
