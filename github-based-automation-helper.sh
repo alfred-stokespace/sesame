@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 # HELP!
 # Due to the incredible flexibility of SSM, it's difficult for an opensource project to anticipate how-or-what you intend to do with SMM

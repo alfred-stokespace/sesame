@@ -25,9 +25,19 @@ RUN set -ex && apk update && apk add --no-cache make git gcc libc-dev curl bash 
     make release
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk add --no-cache \
+        ca-certificates \
+        python3 \
+        py3-pip \
+    && pip3 install --upgrade pip \
+    && pip3 install --no-cache-dir \
+        awscli \
+    && rm -rf /var/cache/apk/*
+
+RUN aws --version
 # Copy our static executable.
 COPY --from=builder /sesame /sesame
+COPY github-based-automation-helper.sh /github-based-automation-helper.sh
 COPY --from=ssm-builder /go/src/github.com/session-manager-plugin/bin/linux_amd64/ssmcli /usr/local/bin/
 
 CMD [ "/sesame" ]
