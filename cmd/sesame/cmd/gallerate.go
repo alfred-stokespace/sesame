@@ -22,17 +22,60 @@ const centerViewName = "center"
 const sideViewName = "side"
 const mainViewName = "main"
 const bottomViewName = "footer"
-
-// todo: make arguments
-const ssmInvokeHelperShell = "/depot/github.com/sesame-heraclitus/github-based-automation-helper.sh"
+const ssmInvokeHelperShell = "github-based-automation-helper.sh"
 const defaultGitBasedAutomation = "repo origin/a/branch/in/repo ssm-param-name-holding-gh-ssh-key \"who && ls -ltra && sleep 10\""
-const doc = "github-automation-document"
 
 var (
 	active     = 0
 	firstFocus = true
 	viewArr    = []string{sideViewName, mainViewName, bottomViewName, centerViewName}
 )
+
+var filterTag string
+var filterTagName string
+var filterTagValue string
+var bestNameTag string
+var automationDocumentName string
+var helperBashFilePathAndName string
+var automationParameterValues string
+var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, "", "", "", ""}
+var sideSelectedNum = 0
+
+type UsefullyNamed struct {
+	InstanceId string
+	Name       string
+	Status     string
+	TagList    []types.Tag
+	Everything types.InstanceInformation
+}
+
+type Gallery struct {
+	SSMCommand
+	Instances        []UsefullyNamed
+	TimeOfRetrieve   string
+	openSsmSessionTo string
+	trackomateOn     string
+	ssmCommandString string
+}
+
+func init() {
+
+	gallerateCmd.Flags().StringVarP(&filterTag, "filterTag", "t", "", "Provide a Tag key:value to filter the gallery.")
+	gallerateCmd.Flags().StringVarP(&bestNameTag, "bestNameTag", "n", "", "Provide a Tag key name that has the best value for a UI friendly name.")
+	gallerateCmd.Flags().StringVarP(&automationDocumentName, "autodocname", "a", "", "Provide an ssm automation document name for use in commanding. OPTIONAL")
+	gallerateCmd.Flags().StringVarP(&helperBashFilePathAndName, "helperBash", "b", ssmInvokeHelperShell, "Provide a local full-or-relative path invocation helper script. OPTIONAL")
+	gallerateCmd.Flags().StringVarP(&automationParameterValues, "autoParams", "p", defaultGitBasedAutomation, "Provide parameters to pass to the helperBash script. DEFAULT IS EXAMPLE ONLY!")
+	err := gallerateCmd.MarkFlagRequired("filterTag")
+	if err != nil {
+		exitOnError(err)
+	}
+	err = gallerateCmd.MarkFlagRequired("bestNameTag")
+	if err != nil {
+		exitOnError(err)
+	}
+	rootCmd.AddCommand(gallerateCmd)
+	gal.conf()
+}
 
 var gallerateCmd = &cobra.Command{
 	Use:   "gallerate",
@@ -130,7 +173,7 @@ var gallerateCmd = &cobra.Command{
 
 			args := strings.SplitN(gal.ssmCommandString, "\"", 2)
 			subArgs := strings.Split(args[0], " ")
-			allArgs := []string{doc, gal.trackomateOn}
+			allArgs := []string{automationDocumentName, gal.trackomateOn}
 			for _, str := range subArgs {
 				if str != "" {
 					allArgs = append(allArgs, str)
@@ -141,7 +184,7 @@ var gallerateCmd = &cobra.Command{
 				fmt.Printf("%d, arg: %s\n", i, arg)
 			}
 
-			cmd := exec.Command(ssmInvokeHelperShell, allArgs...)
+			cmd := exec.Command(helperBashFilePathAndName, allArgs...)
 			var outb, errb bytes.Buffer
 			cmd.Stdout = &outb
 			cmd.Stderr = &errb
@@ -234,46 +277,6 @@ func layout(g *gocui.Gui) error {
 	}
 
 	return nil
-}
-
-var filterTag string
-var filterTagName string
-var filterTagValue string
-var bestNameTag string
-var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, "", "", "", ""}
-var sideSelectedNum = 0
-
-type UsefullyNamed struct {
-	InstanceId string
-	Name       string
-	Status     string
-	TagList    []types.Tag
-	Everything types.InstanceInformation
-}
-
-type Gallery struct {
-	SSMCommand
-	Instances        []UsefullyNamed
-	TimeOfRetrieve   string
-	openSsmSessionTo string
-	trackomateOn     string
-	ssmCommandString string
-}
-
-func init() {
-
-	gallerateCmd.Flags().StringVarP(&filterTag, "filterTag", "t", "", "Provide a Tag key:value to filter the gallery.")
-	gallerateCmd.Flags().StringVarP(&bestNameTag, "bestNameTag", "n", "", "Provide a Tag key name that has the best value for a UI friendly name.")
-	err := gallerateCmd.MarkFlagRequired("filterTag")
-	if err != nil {
-		exitOnError(err)
-	}
-	err = gallerateCmd.MarkFlagRequired("bestNameTag")
-	if err != nil {
-		exitOnError(err)
-	}
-	rootCmd.AddCommand(gallerateCmd)
-	gal.conf()
 }
 
 func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.View, footer *gocui.View) error {
@@ -379,10 +382,17 @@ func (gallery *Gallery) printFooter(footer io.ReadWriter) error {
 
 func cancelQuit(g *gocui.Gui, v *gocui.View) error {
 	found, verr := g.View(centerViewName)
-	exitOnError(verr)
-	if found == nil {
+	// The center view doesn't exist and we want to quit with CtrlC
+	if verr == gocui.ErrUnknownView && found == nil {
 		return gocui.ErrQuit
-	} else {
+	}
+	// something else happened
+	if verr != gocui.ErrUnknownView {
+		exitOnError(verr)
+	}
+
+	// the center exists and we want to exit out of it
+	if found != nil {
 		_ = g.DeleteView(centerViewName)
 	}
 	_, err := g.SetCurrentView(sideViewName)
@@ -506,18 +516,29 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 				center.SelFgColor = gocui.ColorBlack
 				center.Editable = true
 				center.Title = fmt.Sprintf("GitBranch Command this [%s], Ctrl+m/Enter to execute.\n", gal.Instances[sideSelectedNum].Name)
-				_, printErr := fmt.Fprintf(center, defaultGitBasedAutomation)
-				if printErr != nil {
-					_, _ = fmt.Fprintln(center, err.Error())
+				if automationDocumentName == "" {
+					_, printErr := fmt.Fprintf(center, "ERROR: you didn't provide an automation document name argument on startup.")
+					if printErr != nil {
+						_, _ = fmt.Fprintln(center, err.Error())
+					}
+				} else {
+					_, printErr := fmt.Fprintf(center, automationParameterValues)
+					if printErr != nil {
+						_, _ = fmt.Fprintln(center, err.Error())
+					}
 				}
 				_, _ = g.SetCurrentView(centerViewName)
 			}
 		}
 	} else {
-		if found != nil {
+		if found != nil && automationDocumentName != "" {
 			gal.ssmCommandString = found.Buffer()
+			return gocui.ErrQuit
 		}
-		return gocui.ErrQuit
+		if automationDocumentName == "" {
+			_ = g.DeleteView(centerViewName)
+			_, _ = g.SetCurrentView(sideViewName)
+		}
 	}
 
 	return nil
