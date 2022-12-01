@@ -23,11 +23,12 @@ const maxRecords = int32(ApiMax)
 
 type Trackomate struct {
 	SSMCommand
-	maxRecords          int32
-	reportChan          *chan string
-	scheduler           *tasks.Scheduler
-	parentSchedulerId   string
-	childrenSchedulerId string
+	maxRecords            int32
+	reportChan            *chan string
+	scheduler             *tasks.Scheduler
+	parentSchedulerId     string
+	childrenSchedulerId   string
+	automationExecutionId string
 }
 
 // trackomateCmd represents the trackomate command
@@ -46,7 +47,7 @@ var trackomateCmd = &cobra.Command{
 		}
 
 		reportChan := make(chan string, 10)
-		t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", ""}
+		t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", automationExecutionId}
 		t.conf()
 		t.thingDo()
 	},
@@ -61,11 +62,11 @@ func (trackomate *Trackomate) scheduleParent() string {
 			if endState.IsEndState {
 				if endState.IsEndStateSuccess {
 					*trackomate.reportChan <- "Succeeded"
-					_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", automationExecutionId)
+					_, err := fmt.Fprintf(os.Stdout, "[%s]: Success!\n", trackomate.automationExecutionId)
 					exitOnError(err)
 				} else {
 					*trackomate.reportChan <- "Failed"
-					_, err := fmt.Fprintf(os.Stdout, "[%s]: Faled!\n", automationExecutionId)
+					_, err := fmt.Fprintf(os.Stdout, "[%s]: Faled!\n", trackomate.automationExecutionId)
 					exitOnError(err)
 				}
 			}
@@ -83,7 +84,7 @@ type ComplexStatus struct {
 }
 
 func (trackomate *Trackomate) checkParent() ComplexStatus {
-	filters := getParent()
+	filters := trackomate.getParent()
 
 	input := ssm.DescribeAutomationExecutionsInput{
 		Filters:    filters,
@@ -286,7 +287,7 @@ func (trackomate *Trackomate) scheduleChildren() string {
 	childCheckId, err := trackomate.scheduler.Add(&tasks.Task{
 		Interval: time.Duration(2 * time.Second),
 		TaskFunc: func() error {
-			trackomate.checkChildren(automationExecutionId)
+			trackomate.checkChildren(trackomate.automationExecutionId)
 			*trackomate.reportChan <- "child ran"
 			return nil
 		},
@@ -392,9 +393,9 @@ func (trackomate *Trackomate) thingDo() {
 	}
 
 	if endState.IsEndState && endState.IsEndStateSuccess {
-		_, err := fmt.Fprintf(os.Stdout, "PARENT: automation-id=[%s]: Success!\n", automationExecutionId)
+		_, err := fmt.Fprintf(os.Stdout, "PARENT: automation-id=[%s]: Success!\n", trackomate.automationExecutionId)
 		exitOnError(err)
-		trackomate.checkChildren(automationExecutionId)
+		trackomate.checkChildren(trackomate.automationExecutionId)
 	}
 
 	if !endState.IsEndState {
@@ -457,9 +458,9 @@ func (trackomate *Trackomate) getStepExecutions(item *types.AutomationExecutionM
 			for _, commandInv := range commandInvs.CommandInvocations {
 				for _, commandPlugins := range commandInv.CommandPlugins {
 					if commandPlugins.Output != nil && *commandPlugins.Output == "" {
-						fmt.Printf(" CHILD[%s:%s]: output: -empty-\n", *commandPlugins.Name, commandId)
+						fmt.Printf(" CHILD: [%s:%s]: output: -empty-\n", *commandPlugins.Name, commandId)
 					} else if commandPlugins.Output != nil {
-						fmt.Printf(" CHILD[%s:%s]: output: \n\t%s\n", *commandPlugins.Name, commandId, strings.Replace(*commandPlugins.Output, "\n", "\n\t", -1))
+						fmt.Printf(" CHILD: [%s:%s]: output: \n\t%s\n", *commandPlugins.Name, commandId, strings.Replace(*commandPlugins.Output, "\n", "\n\t", -1))
 					}
 				}
 			}
@@ -467,13 +468,13 @@ func (trackomate *Trackomate) getStepExecutions(item *types.AutomationExecutionM
 	}
 }
 
-func getParent() []types.AutomationExecutionFilter {
+func (trackomate *Trackomate) getParent() []types.AutomationExecutionFilter {
 	key := "ExecutionId"
 	filters := []types.AutomationExecutionFilter{
 		{
 			Key: types.AutomationExecutionFilterKey(key),
 			Values: []string{
-				automationExecutionId,
+				trackomate.automationExecutionId,
 			},
 		},
 	}
