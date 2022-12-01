@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/jroimartin/gocui"
+	"github.com/madflojo/tasks"
 	"github.com/spf13/cobra"
 	"io"
 	"log"
@@ -14,6 +16,22 @@ import (
 	"sort"
 	"strings"
 	"time"
+)
+
+const centerViewName = "center"
+const sideViewName = "side"
+const mainViewName = "main"
+const bottomViewName = "footer"
+
+// todo: make arguments
+const ssmInvokeHelperShell = "/depot/github.com/sesame-heraclitus/github-based-automation-helper.sh"
+const defaultGitBasedAutomation = "repo origin/a/branch/in/repo ssm-param-name-holding-gh-ssh-key \"who && ls -ltra && sleep 10\""
+const doc = "github-automation-document"
+
+var (
+	active     = 0
+	firstFocus = true
+	viewArr    = []string{sideViewName, mainViewName, bottomViewName, centerViewName}
 )
 
 var gallerateCmd = &cobra.Command{
@@ -36,11 +54,16 @@ var gallerateCmd = &cobra.Command{
 		}
 		defer g.Close()
 
+		g.SelFgColor = gocui.ColorGreen
 		g.Cursor = true
 
 		g.SetManagerFunc(layout)
 
-		if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+		if err := g.SetKeybinding("", gocui.KeyTab, gocui.ModNone, nextView); err != nil {
+			log.Panicln(err)
+		}
+
+		if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, cancelQuit); err != nil {
 			log.Panicln(err)
 		}
 
@@ -56,10 +79,14 @@ var gallerateCmd = &cobra.Command{
 			log.Panicln(err)
 		}
 
-		if err := g.SetKeybinding("side", gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
+		if err := g.SetKeybinding("", gocui.KeyCtrlM, gocui.ModNone, commandATarget); err != nil {
 			log.Panicln(err)
 		}
-		if err := g.SetKeybinding("side", gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
+
+		if err := g.SetKeybinding(sideViewName, gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
+			log.Panicln(err)
+		}
+		if err := g.SetKeybinding(sideViewName, gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
 			log.Panicln(err)
 		}
 
@@ -69,6 +96,10 @@ var gallerateCmd = &cobra.Command{
 
 		// clear the screen todo: this doesn't work for windows
 		fmt.Print("\033[H\033[2J")
+
+		// Defer close will catch unexpected exit and preserve the containing shell/terminal
+		// this explicit close is needed for the work below to be able to use stdout/err in a meaningful way.
+		g.Close()
 
 		// in this case the user exited, we should not start up again
 		if gal.openSsmSessionTo != "" {
@@ -94,14 +125,122 @@ var gallerateCmd = &cobra.Command{
 			}
 			gal.openSsmSessionTo = ""
 		}
+		if gal.trackomateOn != "" && gal.ssmCommandString != "" {
+			fmt.Println("Attempting SSM Automation Execution")
+
+			args := strings.SplitN(gal.ssmCommandString, "\"", 2)
+			subArgs := strings.Split(args[0], " ")
+			allArgs := []string{doc, gal.trackomateOn}
+			for _, str := range subArgs {
+				if str != "" {
+					allArgs = append(allArgs, str)
+				}
+			}
+			allArgs = append(allArgs, "\""+strings.TrimSpace(args[1]))
+			for i, arg := range allArgs {
+				fmt.Printf("%d, arg: %s\n", i, arg)
+			}
+
+			cmd := exec.Command(ssmInvokeHelperShell, allArgs...)
+			var outb, errb bytes.Buffer
+			cmd.Stdout = &outb
+			cmd.Stderr = &errb
+			if err := cmd.Run(); err != nil {
+				log.Fatal(err)
+			} else {
+				ssmInvokeOut := outb.String()
+				log.Println(ssmInvokeOut)
+				log.Println("stderr: " + errb.String())
+
+				ssmStartOut := strings.Split(ssmInvokeOut, " \"AutomationExecutionId\":")
+				if len(ssmStartOut) != 2 {
+					panic("Missing AutomationExecutionId, can't trackomate!")
+				} else {
+					searchForId := strings.Split(ssmStartOut[1], "\"")
+					if len(searchForId) != 3 {
+						panic("Missing AutomationExecutionId, can't trackomate!")
+					} else {
+						id := searchForId[1]
+						reportChan := make(chan string, 10)
+						t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", id}
+						t.conf()
+						t.thingDo()
+					}
+				}
+			}
+		}
 	},
+}
+
+func layout(g *gocui.Gui) error {
+	maxX, maxY := g.Size()
+	const sideWidth = 40
+	if maxX <= 0 {
+		maxX = sideWidth * 2
+	}
+	if maxY <= 0 {
+		maxY = maxX
+	}
+	footerHeight := 5
+	minusFooter := maxY - footerHeight
+	if minusFooter < 0 {
+		minusFooter = maxY
+	}
+
+	side, err := g.SetView(sideViewName, -1, -1, sideWidth, minusFooter)
+	if err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		side.Highlight = true
+		side.SelBgColor = gocui.ColorGreen
+		side.SelFgColor = gocui.ColorBlack
+		side.Editable = false
+		_, printErr := fmt.Fprintf(side, "Initilizing...")
+		if printErr != nil {
+			_, _ = fmt.Fprintln(side, err.Error())
+		}
+	}
+	if v, err := g.SetView(mainViewName, sideWidth, -1, maxX, minusFooter); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+
+		v.Editable = false
+		v.Wrap = true
+		_, _ = fmt.Fprintf(v, "Initializing...")
+	}
+	footer, err := g.SetView(bottomViewName, -1, maxY-5, maxX, maxY)
+	if err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+
+		footer.Editable = false
+		footer.Wrap = true
+		_, _ = fmt.Fprintf(footer, "Initilizing...")
+	}
+
+	if firstFocus {
+		if _, err := g.SetCurrentView(sideViewName); err != nil {
+			return err
+		}
+		active++
+		firstFocus = false
+	}
+
+	if len(gal.Instances) == 0 {
+		go backGroundUpdate(g)
+	}
+
+	return nil
 }
 
 var filterTag string
 var filterTagName string
 var filterTagValue string
 var bestNameTag string
-var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, "", ""}
+var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, "", "", "", ""}
 var sideSelectedNum = 0
 
 type UsefullyNamed struct {
@@ -117,6 +256,8 @@ type Gallery struct {
 	Instances        []UsefullyNamed
 	TimeOfRetrieve   string
 	openSsmSessionTo string
+	trackomateOn     string
+	ssmCommandString string
 }
 
 func init() {
@@ -229,69 +370,25 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.Vie
 func (gallery *Gallery) printFooter(footer io.ReadWriter) error {
 	_, err := fmt.Fprintf(footer, "Total instance count: %d @(%s)\n", len(gallery.Instances), gallery.TimeOfRetrieve)
 	if err == nil {
-		fmt.Fprintln(footer, "Ctrl+r => Refresh gallery | Ctrl+s => SSM Session Open")
-		fmt.Fprintln(footer, "Ctrl+q => Quit            | Ctrl+c => Quit")
-		fmt.Fprintln(footer, "UpArrow/DownArrow => Navigate gallery up/down")
+		_, _ = fmt.Fprintln(footer, "Ctrl+r => Refresh gallery | Ctrl+s => SSM Session Open | Ctrl+m/Enter => Command Target")
+		_, _ = fmt.Fprintln(footer, "Ctrl+q => Quit            | Ctrl+c => Cancel/Quit      |")
+		_, _ = fmt.Fprintln(footer, "Up ↑/Down ↓ => Navigate gallery")
 	}
 	return err
 }
 
-func layout(g *gocui.Gui) error {
-	maxX, maxY := g.Size()
-	const sideWidth = 40
-	if maxX <= 0 {
-		maxX = sideWidth * 2
+func cancelQuit(g *gocui.Gui, v *gocui.View) error {
+	found, verr := g.View(centerViewName)
+	exitOnError(verr)
+	if found == nil {
+		return gocui.ErrQuit
+	} else {
+		_ = g.DeleteView(centerViewName)
 	}
-	if maxY <= 0 {
-		maxY = maxX
-	}
-	footerHeight := 5
-	minusFooter := maxY - footerHeight
-	if minusFooter < 0 {
-		minusFooter = maxY
-	}
-
-	side, err := g.SetView("side", -1, -1, sideWidth, minusFooter)
+	_, err := g.SetCurrentView(sideViewName)
 	if err != nil {
-		if err != gocui.ErrUnknownView {
-			return err
-		}
-		side.Highlight = true
-		side.SelBgColor = gocui.ColorGreen
-		side.SelFgColor = gocui.ColorBlack
-		side.Editable = false
-		fmt.Fprintf(side, "Initilizing...")
-		if err != nil {
-			fmt.Fprintln(side, err.Error())
-		}
-	}
-	if v, err := g.SetView("main", sideWidth, -1, maxX, minusFooter); err != nil {
-		if err != gocui.ErrUnknownView {
-			return err
-		}
-
-		v.Editable = false
-		v.Wrap = true
-		fmt.Fprintf(v, "Initializing...")
-	}
-	footer, err := g.SetView("footer", -1, maxY-5, maxX, maxY)
-	if err != nil {
-		if err != gocui.ErrUnknownView {
-			return err
-		}
-
-		footer.Editable = false
-		footer.Wrap = true
-		fmt.Fprintf(footer, "Initilizing...")
-	}
-	if _, err := g.SetCurrentView("side"); err != nil {
 		return err
 	}
-
-	if len(gal.Instances) == 0 {
-		go backGroundUpdate(g)
-	}
-
 	return nil
 }
 
@@ -332,7 +429,7 @@ func cursorUp(g *gocui.Gui, v *gocui.View) error {
 func changeMainView(g *gocui.Gui, v *gocui.View) error {
 	var b strings.Builder
 
-	if v, err := g.View("main"); err == nil {
+	if v, err := g.View(mainViewName); err == nil {
 		v.Clear()
 		if sideSelectedNum >= len(gal.Instances) {
 			return nil
@@ -340,9 +437,9 @@ func changeMainView(g *gocui.Gui, v *gocui.View) error {
 		if sideSelectedNum < 0 {
 			sideSelectedNum = 0
 		}
-		fmt.Fprintf(&b, "PING STATUS: %s (%s)\n", gal.Instances[sideSelectedNum].Status, gal.Instances[sideSelectedNum].Everything.LastPingDateTime)
+		_, _ = fmt.Fprintf(&b, "PING STATUS: %s (%s)\n", gal.Instances[sideSelectedNum].Status, gal.Instances[sideSelectedNum].Everything.LastPingDateTime)
 		for _, t := range gal.Instances[sideSelectedNum].TagList {
-			fmt.Fprintf(&b, "%s:\t%s\n", *t.Key, *t.Value)
+			_, _ = fmt.Fprintf(&b, "%s:\t%s\n", *t.Key, *t.Value)
 		}
 		_, erri := fmt.Fprintf(v, "%s", b.String())
 		if erri == nil {
@@ -355,12 +452,12 @@ func changeMainView(g *gocui.Gui, v *gocui.View) error {
 }
 
 func refresh(g *gocui.Gui, v *gocui.View) error {
-	if v, err := g.View("side"); err == nil {
+	if v, err := g.View(sideViewName); err == nil {
 		v.Clear()
-		fmt.Fprintln(v, "Refreshing...")
-		if f, err := g.View("footer"); err == nil {
+		_, _ = fmt.Fprintln(v, "Refreshing...")
+		if f, err := g.View(bottomViewName); err == nil {
 			f.Clear()
-			fmt.Fprintln(f, "Refreshing...")
+			_, _ = fmt.Fprintln(f, "Refreshing...")
 			go backGroundUpdate(g)
 		}
 	} else {
@@ -382,15 +479,95 @@ func ssmStart(g *gocui.Gui, v *gocui.View) error {
 	return gocui.ErrQuit
 }
 
+func commandATarget(g *gocui.Gui, v *gocui.View) error {
+	maxX, maxY := g.Size()
+	found, verr := g.View(centerViewName)
+	if verr == gocui.ErrUnknownView {
+		if found == nil {
+			// lets capture which host the user selected and prepare for ssm
+			if sideSelectedNum >= len(gal.Instances) {
+				return nil
+			}
+			if sideSelectedNum < 0 {
+				sideSelectedNum = 0
+			}
+			gal.trackomateOn = gal.Instances[sideSelectedNum].InstanceId
+
+			xStart := maxX / 4
+			yStart := maxY / 3
+			center, err := g.SetView(centerViewName, xStart, yStart, xStart*3, yStart+3)
+			if err != nil {
+				if err != gocui.ErrUnknownView {
+					return err
+				}
+				center.Highlight = true
+				center.Wrap = true
+				center.SelBgColor = gocui.ColorGreen
+				center.SelFgColor = gocui.ColorBlack
+				center.Editable = true
+				center.Title = fmt.Sprintf("GitBranch Command this [%s], Ctrl+m/Enter to execute.\n", gal.Instances[sideSelectedNum].Name)
+				_, printErr := fmt.Fprintf(center, defaultGitBasedAutomation)
+				if printErr != nil {
+					_, _ = fmt.Fprintln(center, err.Error())
+				}
+				_, _ = g.SetCurrentView(centerViewName)
+			}
+		}
+	} else {
+		if found != nil {
+			gal.ssmCommandString = found.Buffer()
+		}
+		return gocui.ErrQuit
+	}
+
+	return nil
+}
+
 func backGroundUpdate(g *gocui.Gui) {
 	g.Update(func(g *gocui.Gui) error {
-		if v, err := g.View("side"); err == nil {
-			if f, err := g.View("footer"); err == nil {
-				gal.thingDoWithTarget(g, v, f)
+		if v, err := g.View(sideViewName); err == nil {
+			if f, err := g.View(bottomViewName); err == nil {
+				_ = gal.thingDoWithTarget(g, v, f)
 			}
 		} else {
 			return err
 		}
 		return nil
 	})
+}
+
+func nextView(g *gocui.Gui, v *gocui.View) error {
+	nextIndex := (active + 1) % len(viewArr)
+	name := viewArr[nextIndex]
+
+	currentView := g.CurrentView()
+
+	g.Cursor = false
+	currentView.Highlight = false
+	_, err := g.View(name)
+	if err != nil {
+		if name != centerViewName {
+			// optional modal
+			return err
+		}
+	}
+
+	if v, err := g.SetCurrentView(name); err != nil {
+		if name != centerViewName {
+			// optional modal
+			return err
+		}
+	} else {
+		v.Highlight = true
+	}
+
+	if name == sideViewName || name == centerViewName {
+		g.Cursor = true
+		g.Highlight = true
+	} else {
+		g.Cursor = false
+	}
+
+	active = nextIndex
+	return nil
 }
