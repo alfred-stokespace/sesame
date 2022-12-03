@@ -129,7 +129,16 @@ var gallerateCmd = &cobra.Command{
 		if err := g.SetKeybinding(sideViewName, gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
 			log.Panicln(err)
 		}
+
+		if err := g.SetKeybinding(mainViewName, gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
+			log.Panicln(err)
+		}
+
 		if err := g.SetKeybinding(sideViewName, gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
+			log.Panicln(err)
+		}
+
+		if err := g.SetKeybinding(mainViewName, gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
 			log.Panicln(err)
 		}
 
@@ -328,7 +337,6 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.Vie
 			}
 			gallery.Instances = append(gallery.Instances, aNamedThing)
 		}
-
 	}
 
 	if pageNum == 0 {
@@ -343,16 +351,23 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.Vie
 		} else if gallery.Instances[i].Name == "" && gallery.Instances[j].Name == "" {
 			return true
 		}
-
 		return gallery.Instances[i].Name < gallery.Instances[j].Name
 	})
 	inventoryView.Clear()
 	for _, value := range gallery.Instances {
 
+		deployLockedStatusSymbol := "○"
+		for _, tagTuple := range value.TagList {
+			if tagTuple.Key != nil && *tagTuple.Key == "DeployLocked" && tagTuple.Value != nil && *tagTuple.Value == "true" {
+				deployLockedStatusSymbol = "◙"
+			}
+		}
+
 		var pict = "\033[31;1m!\033[0m"
 		if value.Status == "Online" {
 			pict = "\033[32;1m^\033[0m"
 		}
+		pict = pict + deployLockedStatusSymbol
 		_, err := fmt.Fprintln(inventoryView, pict+" "+value.InstanceId+"("+value.Name+")")
 		if err != nil {
 			panic(err)
@@ -407,7 +422,6 @@ func quit(g *gocui.Gui, v *gocui.View) error {
 }
 
 func cursorDown(g *gocui.Gui, v *gocui.View) error {
-	sideSelectedNum++
 	if v != nil {
 		cx, cy := v.Cursor()
 		if err := v.SetCursor(cx, cy+1); err != nil {
@@ -416,13 +430,15 @@ func cursorDown(g *gocui.Gui, v *gocui.View) error {
 				return err
 			}
 		}
-		return changeMainView(g, v)
+		if v.Name() == sideViewName {
+			sideSelectedNum++
+			return changeMainView(g, v)
+		}
 	}
 	return nil
 }
 
 func cursorUp(g *gocui.Gui, v *gocui.View) error {
-	sideSelectedNum--
 	if v != nil {
 		ox, oy := v.Origin()
 		cx, cy := v.Cursor()
@@ -431,7 +447,10 @@ func cursorUp(g *gocui.Gui, v *gocui.View) error {
 				return err
 			}
 		}
-		return changeMainView(g, v)
+		if v.Name() == sideViewName {
+			sideSelectedNum--
+			return changeMainView(g, v)
+		}
 	}
 	return nil
 }
@@ -441,6 +460,7 @@ func changeMainView(g *gocui.Gui, v *gocui.View) error {
 
 	if v, err := g.View(mainViewName); err == nil {
 		v.Clear()
+		v.Autoscroll = true
 		if sideSelectedNum >= len(gal.Instances) {
 			return nil
 		}
