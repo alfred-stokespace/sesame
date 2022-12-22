@@ -318,24 +318,33 @@ func (gallery *Gallery) thingDoWithTarget(g *gocui.Gui, inventoryView *gocui.Vie
 		gallery.TimeOfRetrieve = time.Now().String()
 		for _, value := range page.InstanceInformationList {
 
-			tagInput := &ssm.ListTagsForResourceInput{
-				ResourceId:   value.InstanceId,
-				ResourceType: types.ResourceTypeForTagging(value.ResourceType),
-			}
-			listTagsForResourceOutput, listTagServiceError := gallery.svc.ListTagsForResource(context.Background(), tagInput)
-			if listTagServiceError != nil {
-				panic(listTagServiceError)
-			}
-
 			aNamedThing := UsefullyNamed{InstanceId: *value.InstanceId, Status: string(value.PingStatus), Everything: value}
-
-			aNamedThing.TagList = listTagsForResourceOutput.TagList
-			for _, tagV := range listTagsForResourceOutput.TagList {
-				if bestNameTag == *tagV.Key {
-					aNamedThing.Name = *tagV.Value
+			if value.ResourceType == types.ResourceTypeEc2Instance {
+				if value.Name == nil {
+					aNamedThing.Name = *value.InstanceId
+				} else {
+					aNamedThing.Name = *value.Name
 				}
+				aNamedThing.TagList = make([]types.Tag, 0)
+				gallery.Instances = append(gallery.Instances, aNamedThing)
+			} else if value.ResourceType == types.ResourceTypeManagedInstance {
+				tagInput := &ssm.ListTagsForResourceInput{
+					ResourceId:   value.InstanceId,
+					ResourceType: types.ResourceTypeForTagging(value.ResourceType),
+				}
+				listTagsForResourceOutput, listTagServiceError := gallery.svc.ListTagsForResource(context.Background(), tagInput)
+				if listTagServiceError != nil {
+					panic(listTagServiceError)
+				}
+
+				aNamedThing.TagList = listTagsForResourceOutput.TagList
+				for _, tagV := range listTagsForResourceOutput.TagList {
+					if bestNameTag == *tagV.Key {
+						aNamedThing.Name = *tagV.Value
+					}
+				}
+				gallery.Instances = append(gallery.Instances, aNamedThing)
 			}
-			gallery.Instances = append(gallery.Instances, aNamedThing)
 		}
 	}
 
