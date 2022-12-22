@@ -1,0 +1,17 @@
+name: 'Sesame GH Action'
+description: 'Greet someone and record the time'
+inputs:
+  command:
+    description: 'Which command of Sesame binary to run.'
+    required: true
+    default: 'trackomate'
+  args:
+    description: 'Args for the command.'
+    required: true
+    default: ''
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+    - ${{ inputs.command }}
+    - ${{ inputs.args }}
