@@ -3,6 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"os"
@@ -316,7 +319,12 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 		execs := Executions{}
 		execs.allComplete = true
 		for _, item := range resChildren.AutomationExecutionMetadataList {
-			name := trackomate.getManagedInstanceTagValue(&item, "Name")
+			var name string
+			if strings.HasPrefix(*item.Target, "mi-") {
+				name = trackomate.getManagedInstanceTagValue(&item, "Name")
+			} else {
+				name = trackomate.getEC2InstanceTagValue(&item, "Name")
+			}
 			outs := item.Outputs
 			for s, k := range outs {
 				fmt.Fprintf(os.Stdout, "%s:%v", s, k)
@@ -479,6 +487,29 @@ func (trackomate *Trackomate) getParent() []types.AutomationExecutionFilter {
 		},
 	}
 	return filters
+}
+
+func (trackomate *Trackomate) getEC2InstanceTagValue(item *types.AutomationExecutionMetadata, tagName string) string {
+	maxResults := int32(50)
+
+	str := item.Target
+	strVals := []string{*str}
+	tagListFilter := ec2.DescribeTagsInput{
+		Filters: []ec2types.Filter{{
+			Name:   aws.String("resource-id"),
+			Values: strVals,
+		}},
+		MaxResults: &maxResults,
+	}
+	tags, tagError := trackomate.svcEc2.DescribeTags(context.Background(), &tagListFilter)
+	exitOnError(tagError)
+	var name = ""
+	for _, v := range tags.Tags {
+		if *v.Key == tagName {
+			name = *v.Value
+		}
+	}
+	return name
 }
 
 func getFirstLevelChildren(executionId string) []types.AutomationExecutionFilter {

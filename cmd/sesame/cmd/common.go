@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 	"os"
@@ -42,7 +43,8 @@ func (m *SesameError) Error() string {
 }
 
 type SSMCommand struct {
-	svc *ssm.Client
+	svc    *ssm.Client
+	svcEc2 *ec2.Client
 }
 
 func (ssmCommand *SSMCommand) conf() {
@@ -54,6 +56,7 @@ func (ssmCommand *SSMCommand) conf() {
 	)
 	exitOnError(err)
 	ssmCommand.svc = ssm.NewFromConfig(conf)
+	ssmCommand.svcEc2 = ec2.NewFromConfig(conf)
 }
 
 func (ssmCommand *SSMCommand) thingDo() {
