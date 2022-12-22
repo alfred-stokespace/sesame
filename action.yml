@@ -5,12 +5,12 @@ inputs:
     description: 'Which command of Sesame binary to run.'
     required: true
     default: 'trackomate'
-  arg1:
-    description: 'Arg1 for the command.'
+  flag1:
+    description: '1st flag for the command.'
     required: true
-    default: '-t'
-  arg1Value:
-    description: 'Arg1 Value for the command.'
+    default: '-i'
+  flag1Arg:
+    description: 'Argument for the 1st flag of the command.'
     required: true
     default: ''
 runs:
@@ -19,5 +19,5 @@ runs:
   args:
     - '/sesame'
     - ${{ inputs.command }}
-    - ${{ inputs.arg1 }}
-    - ${{ inputs.arg1Value }}
+    - ${{ inputs.flag1 }}
+    - ${{ inputs.flag1Arg }}
