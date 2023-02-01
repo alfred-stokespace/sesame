@@ -10,4 +10,5 @@ require (
 	github.com/jroimartin/gocui v0.5.0
 	github.com/madflojo/tasks v1.0.2
 	github.com/spf13/cobra v1.4.0
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

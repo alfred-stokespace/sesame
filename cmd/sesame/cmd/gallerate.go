@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/Heraclitus/sesame/cmd/sesame/automation"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/jroimartin/gocui"
@@ -40,6 +41,10 @@ var helperBashFilePathAndName string
 var automationParameterValues string
 var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, "", "", "", ""}
 var sideSelectedNum = 0
+var ssmExecutionItemNum = 0
+var automationLibSearchPath = "./"
+var automationLibs []automation.AutomationLib
+var ssmAutomationParams = SSMAutomationParameters{"", "", "", ""}
 
 type UsefullyNamed struct {
 	InstanceId string
@@ -58,11 +63,20 @@ type Gallery struct {
 	ssmCommandString string
 }
 
+type SSMAutomationParameters struct {
+	repoName          string
+	cmd               string
+	branchName        string
+	ghSshKeyParamName string
+}
+
 func init() {
 
 	gallerateCmd.Flags().StringVarP(&filterTag, "filterTag", "t", "", "Provide a Tag key:value to filter the gallery.")
 	gallerateCmd.Flags().StringVarP(&bestNameTag, "bestNameTag", "n", "", "Provide a Tag key name that has the best value for a UI friendly name.")
 	gallerateCmd.Flags().StringVarP(&automationDocumentName, "autodocname", "a", "", "Provide an ssm automation document name for use in commanding. OPTIONAL")
+	gallerateCmd.Flags().StringVarP(&ssmAutomationParams.ghSshKeyParamName, "autosshparamname", "g", "", "Provide an ssm parameter name containing a GitHub SSH Key w/repo permissions. OPTIONAL")
+	gallerateCmd.Flags().StringVarP(&automationLibSearchPath, "libsearchpath", "l", "./", "Provide a path to search for library automations. OPTIONAL")
 	gallerateCmd.Flags().StringVarP(&helperBashFilePathAndName, "helperBash", "b", ssmInvokeHelperShell, "Provide a local full-or-relative path invocation helper script. OPTIONAL")
 	gallerateCmd.Flags().StringVarP(&automationParameterValues, "autoParams", "p", defaultGitBasedAutomation, "Provide parameters to pass to the helperBash script. DEFAULT IS EXAMPLE ONLY!")
 	err := gallerateCmd.MarkFlagRequired("filterTag")
@@ -142,6 +156,14 @@ var gallerateCmd = &cobra.Command{
 			log.Panicln(err)
 		}
 
+		if err := g.SetKeybinding(centerViewName, gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
+			log.Panicln(err)
+		}
+
+		if err := g.SetKeybinding(centerViewName, gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
+			log.Panicln(err)
+		}
+
 		if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 			log.Panicln(err)
 		}
@@ -198,6 +220,9 @@ var gallerateCmd = &cobra.Command{
 			cmd.Stdout = &outb
 			cmd.Stderr = &errb
 			if err := cmd.Run(); err != nil {
+				log.Println("Gallerate-to-helper handoff failed!")
+				log.Println("stdout: " + outb.String())
+				log.Println("stderr: " + errb.String())
 				log.Fatal(err)
 			} else {
 				ssmInvokeOut := outb.String()
@@ -442,6 +467,8 @@ func cursorDown(g *gocui.Gui, v *gocui.View) error {
 		if v.Name() == sideViewName {
 			sideSelectedNum++
 			return changeMainView(g, v)
+		} else if v.Name() == centerViewName {
+			ssmExecutionItemNum++
 		}
 	}
 	return nil
@@ -459,6 +486,8 @@ func cursorUp(g *gocui.Gui, v *gocui.View) error {
 		if v.Name() == sideViewName {
 			sideSelectedNum--
 			return changeMainView(g, v)
+		} else if v.Name() == centerViewName {
+			ssmExecutionItemNum--
 		}
 	}
 	return nil
@@ -523,7 +552,7 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 	found, verr := g.View(centerViewName)
 	if verr == gocui.ErrUnknownView {
 		if found == nil {
-			// lets capture which host the user selected and prepare for ssm
+			// let's capture which host the user selected and prepare for commanding
 			if sideSelectedNum >= len(gal.Instances) {
 				return nil
 			}
@@ -532,9 +561,9 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 			}
 			gal.trackomateOn = gal.Instances[sideSelectedNum].InstanceId
 
-			xStart := maxX / 4
+			xStart := maxX / 10
 			yStart := maxY / 3
-			center, err := g.SetView(centerViewName, xStart, yStart, xStart*3, yStart+3)
+			center, err := g.SetView(centerViewName, xStart, yStart, xStart*9, yStart+5)
 			if err != nil {
 				if err != gocui.ErrUnknownView {
 					return err
@@ -551,6 +580,7 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 						_, _ = fmt.Fprintln(center, err.Error())
 					}
 				} else {
+					automationLibs = automation.GetListOfAutomationLibraries(center, automationLibSearchPath)
 					_, printErr := fmt.Fprintf(center, automationParameterValues)
 					if printErr != nil {
 						_, _ = fmt.Fprintln(center, err.Error())
@@ -561,7 +591,35 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 		}
 	} else {
 		if found != nil && automationDocumentName != "" {
-			gal.ssmCommandString = found.Buffer()
+			cmdBuffer := found.Buffer()
+			lines := strings.SplitN(cmdBuffer, "\n", -1)
+			lineChosen := lines[ssmExecutionItemNum]
+			const documentNamePrefix = "> "
+			if strings.HasPrefix(lineChosen, documentNamePrefix) {
+				for _, lib := range automationLibs {
+					selectionPortion := strings.Replace(lineChosen, documentNamePrefix, "", 1)
+					if strings.HasPrefix(selectionPortion, lib.Metadata.Name) {
+						for k, v := range lib.Metadata.Annotations {
+							if strings.HasSuffix(k, "bash") {
+								ssmAutomationParams.cmd = v
+							} else if strings.HasSuffix(k, "automation-repo-name") {
+								ssmAutomationParams.repoName = v
+							} else if strings.HasSuffix(k, "automation-branch-name") {
+								ssmAutomationParams.branchName = v
+							} else if strings.HasSuffix(k, "automation-gh-ssm-param-name") {
+								ssmAutomationParams.ghSshKeyParamName = v
+							}
+						}
+						if ssmAutomationParams.repoName == "" || ssmAutomationParams.branchName == "" || ssmAutomationParams.cmd == "" || ssmAutomationParams.ghSshKeyParamName == "" {
+							panic("Desired automation library is missing either repoName, branchName, ssmGHParamName or the command to execute")
+						} else {
+							gal.ssmCommandString = ssmAutomationParams.repoName + " " + ssmAutomationParams.branchName + " " + ssmAutomationParams.ghSshKeyParamName + " " + ssmAutomationParams.cmd
+						}
+					}
+				}
+			} else {
+				gal.ssmCommandString = lineChosen
+			}
 			return gocui.ErrQuit
 		}
 		if automationDocumentName == "" {
