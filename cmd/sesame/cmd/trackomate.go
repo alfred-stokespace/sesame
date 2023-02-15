@@ -414,7 +414,7 @@ func (trackomate *Trackomate) thingDo() {
 		defer trackomate.scheduler.Stop()
 
 		if trackomate.maxPollCount < 0 {
-			trackomate.maxPollCount = math.MaxInt
+			trackomate.maxPollCount = math.MaxInt32
 		}
 		x := trackomate.maxPollCount
 		for i := 1; i < x-1; i++ {
