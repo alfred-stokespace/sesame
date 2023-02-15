@@ -7,6 +7,7 @@ import (
 	"github.com/Heraclitus/sesame/cmd/sesame/automation"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/smithy-go/ptr"
 	"github.com/jroimartin/gocui"
 	"github.com/madflojo/tasks"
 	"github.com/spf13/cobra"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -39,12 +41,19 @@ var bestNameTag string
 var automationDocumentName string
 var helperBashFilePathAndName string
 var automationParameterValues string
-var gal = Gallery{SSMCommand{}, []UsefullyNamed{}, "", "", "", ""}
+var gal = Gallery{
+	SSMCommand{},
+	[]UsefullyNamed{},
+	"",
+	"",
+	"",
+	nil,
+	""}
 var sideSelectedNum = 0
 var ssmExecutionItemNum = 0
 var automationLibSearchPath = "./"
 var automationLibs []automation.AutomationLib
-var ssmAutomationParams = SSMAutomationParameters{"", "", "", ""}
+var ssmAutomationParams = SSMAutomationParameters{"", "", "", "", "", "", "", make(map[string]string)}
 
 type UsefullyNamed struct {
 	InstanceId string
@@ -60,14 +69,23 @@ type Gallery struct {
 	TimeOfRetrieve   string
 	openSsmSessionTo string
 	trackomateOn     string
+	instance         *UsefullyNamed
 	ssmCommandString string
 }
 
 type SSMAutomationParameters struct {
 	repoName          string
+	automationType    string
+	docName           string
+	docVersion        string
 	cmd               string
 	branchName        string
 	ghSshKeyParamName string
+	params            map[string]string
+}
+
+type templateContext struct {
+	Tags map[string]string
 }
 
 func init() {
@@ -204,46 +222,91 @@ var gallerateCmd = &cobra.Command{
 
 			args := strings.SplitN(gal.ssmCommandString, "\"", 2)
 			subArgs := strings.Split(args[0], " ")
-			allArgs := []string{automationDocumentName, gal.trackomateOn}
-			for _, str := range subArgs {
-				if str != "" {
-					allArgs = append(allArgs, str)
-				}
-			}
-			allArgs = append(allArgs, "\""+strings.TrimSpace(args[1]))
-			for i, arg := range allArgs {
-				fmt.Printf("%d, arg: %s\n", i, arg)
-			}
-
-			cmd := exec.Command(helperBashFilePathAndName, allArgs...)
-			var outb, errb bytes.Buffer
-			cmd.Stdout = &outb
-			cmd.Stderr = &errb
-			if err := cmd.Run(); err != nil {
-				log.Println("Gallerate-to-helper handoff failed!")
-				log.Println("stdout: " + outb.String())
-				log.Println("stderr: " + errb.String())
-				log.Fatal(err)
-			} else {
-				ssmInvokeOut := outb.String()
-				log.Println(ssmInvokeOut)
-				log.Println("stderr: " + errb.String())
-
-				ssmStartOut := strings.Split(ssmInvokeOut, " \"AutomationExecutionId\":")
-				if len(ssmStartOut) != 2 {
-					panic("Missing AutomationExecutionId, can't trackomate!")
-				} else {
-					searchForId := strings.Split(ssmStartOut[1], "\"")
-					if len(searchForId) != 3 {
-						panic("Missing AutomationExecutionId, can't trackomate!")
-					} else {
-						id := searchForId[1]
-						reportChan := make(chan string, 10)
-						t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", id}
-						t.conf()
-						t.thingDo()
+			var cmd *exec.Cmd
+			if ssmAutomationParams.automationType == automation.BashType {
+				allArgs := []string{automationDocumentName, gal.trackomateOn}
+				for _, str := range subArgs {
+					if str != "" {
+						allArgs = append(allArgs, str)
 					}
 				}
+				allArgs = append(allArgs, "\""+strings.TrimSpace(args[1]))
+				for i, arg := range allArgs {
+					fmt.Printf("%d, arg: %s\n", i, arg)
+				}
+				cmd = exec.Command(helperBashFilePathAndName, allArgs...)
+				var outb, errb bytes.Buffer
+				cmd.Stdout = &outb
+				cmd.Stderr = &errb
+				if err := cmd.Run(); err != nil {
+					log.Println("Gallerate-to-helper handoff failed!")
+					log.Println("stdout: " + outb.String())
+					log.Println("stderr: " + errb.String())
+					log.Fatal(err)
+				} else {
+					ssmInvokeOut := outb.String()
+					log.Println(ssmInvokeOut)
+					log.Println("stderr: " + errb.String())
+
+					ssmStartOut := strings.Split(ssmInvokeOut, " \"AutomationExecutionId\":")
+					if len(ssmStartOut) != 2 {
+						panic("Missing AutomationExecutionId, can't trackomate!")
+					} else {
+						searchForId := strings.Split(ssmStartOut[1], "\"")
+						if len(searchForId) != 3 {
+							panic("Missing AutomationExecutionId, can't trackomate!")
+						} else {
+							id := searchForId[1]
+							reportChan := make(chan string, 10)
+							t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", id}
+							t.conf()
+							t.thingDo()
+						}
+					}
+				}
+			} else if ssmAutomationParams.automationType == automation.SsmDocType {
+				maxError := "0"
+				maxConcur := "1"
+				params := make(map[string][]string)
+
+				for k, v := range ssmAutomationParams.params {
+					mapOfTagKeyValues := make(map[string]string)
+					if strings.Contains(v, "{{") {
+						for _, tag := range gal.instance.TagList {
+							mapOfTagKeyValues[*tag.Key] = *tag.Value
+						}
+						templateContext := templateContext{Tags: mapOfTagKeyValues}
+						tmpl, err := template.New(k).Parse(v)
+						exitOnError(err)
+						nVal := strings.Builder{}
+
+						err = tmpl.Execute(&nVal, templateContext)
+						exitOnError(err)
+						params[k] = []string{nVal.String()}
+					} else {
+						params[k] = []string{v}
+					}
+				}
+				var targets = make([]types.Target, 1)
+				targets[0] = types.Target{
+					Key:    ptr.String("ParameterValues"),
+					Values: []string{gal.trackomateOn},
+				}
+				execInput := &ssm.StartAutomationExecutionInput{
+					DocumentName:        &ssmAutomationParams.docName,
+					DocumentVersion:     &ssmAutomationParams.docVersion,
+					MaxErrors:           &maxError,
+					MaxConcurrency:      &maxConcur,
+					Parameters:          params,
+					Targets:             targets,
+					TargetParameterName: ptr.String("InstanceIds"),
+				}
+				execOutput, execError := gal.svc.StartAutomationExecution(context.Background(), execInput)
+				exitOnError(execError)
+				reportChan := make(chan string, 10)
+				t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", *execOutput.AutomationExecutionId}
+				t.conf()
+				t.thingDo()
 			}
 		}
 	},
@@ -560,6 +623,7 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 				sideSelectedNum = 0
 			}
 			gal.trackomateOn = gal.Instances[sideSelectedNum].InstanceId
+			gal.instance = &gal.Instances[sideSelectedNum]
 
 			xStart := maxX / 10
 			yStart := maxY / 3
@@ -599,7 +663,13 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 				for _, lib := range automationLibs {
 					selectionPortion := strings.Replace(lineChosen, documentNamePrefix, "", 1)
 					if strings.HasPrefix(selectionPortion, lib.Metadata.Name) {
+						for k, v := range lib.Metadata.Labels {
+							if strings.HasSuffix(k, "automation") {
+								ssmAutomationParams.automationType = v
+							}
+						}
 						for k, v := range lib.Metadata.Annotations {
+							const paramPrefix = "automation-doc-param-"
 							if strings.HasSuffix(k, "bash") {
 								ssmAutomationParams.cmd = v
 							} else if strings.HasSuffix(k, "automation-repo-name") {
@@ -608,12 +678,30 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 								ssmAutomationParams.branchName = v
 							} else if strings.HasSuffix(k, "automation-gh-ssm-param-name") {
 								ssmAutomationParams.ghSshKeyParamName = v
+							} else if strings.HasSuffix(k, "automation-doc-name") {
+								ssmAutomationParams.docName = v
+							} else if strings.HasSuffix(k, "automation-doc-version") {
+								ssmAutomationParams.docVersion = v
+							} else if strings.Contains(k, paramPrefix) {
+								paramName := strings.SplitN(k, paramPrefix, 2)
+								if len(paramName) > 1 {
+									ssmAutomationParams.params[paramName[1]] = v
+								}
 							}
 						}
-						if ssmAutomationParams.repoName == "" || ssmAutomationParams.branchName == "" || ssmAutomationParams.cmd == "" || ssmAutomationParams.ghSshKeyParamName == "" {
-							panic("Desired automation library is missing either repoName, branchName, ssmGHParamName or the command to execute")
-						} else {
-							gal.ssmCommandString = ssmAutomationParams.repoName + " " + ssmAutomationParams.branchName + " " + ssmAutomationParams.ghSshKeyParamName + " " + ssmAutomationParams.cmd
+						if ssmAutomationParams.automationType == "" {
+							panic("Desired automation library has no recognized type")
+						} else if ssmAutomationParams.automationType == automation.SsmDocType {
+							if isMinimumArgsForDocAutomationEmpty() {
+								panic("Desired automation library is missing either automation-doc-name or automation-doc-version")
+							}
+							gal.ssmCommandString = ssmAutomationParams.docName
+						} else if ssmAutomationParams.automationType == automation.BashType {
+							if isMinimumArgsForRepoAutomationEmpty() {
+								panic("Desired automation library is missing either repoName, branchName, ssmGHParamName or the command to execute")
+							} else {
+								gal.ssmCommandString = ssmAutomationParams.repoName + " " + ssmAutomationParams.branchName + " " + ssmAutomationParams.ghSshKeyParamName + " " + ssmAutomationParams.cmd
+							}
 						}
 					}
 				}
@@ -629,6 +717,14 @@ func commandATarget(g *gocui.Gui, v *gocui.View) error {
 	}
 
 	return nil
+}
+
+func isMinimumArgsForDocAutomationEmpty() bool {
+	return ssmAutomationParams.docVersion == "" || ssmAutomationParams.docVersion == ""
+}
+
+func isMinimumArgsForRepoAutomationEmpty() bool {
+	return ssmAutomationParams.repoName == "" || ssmAutomationParams.branchName == "" || ssmAutomationParams.cmd == "" || ssmAutomationParams.ghSshKeyParamName == ""
 }
 
 func backGroundUpdate(g *gocui.Gui) {

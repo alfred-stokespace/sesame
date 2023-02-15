@@ -13,6 +13,9 @@ import (
 	"strings"
 )
 
+const SsmDocType = "ssm-doc-type"
+const BashType = "bash-type"
+
 type AutomationLib struct {
 	Metadata struct {
 		Name        string
@@ -52,9 +55,16 @@ func GetListOfAutomationLibraries(center *gocui.View, directoryToSearch string) 
 					grabIt := false
 					for labelK, labelV := range lib.Metadata.Labels {
 						if strings.HasSuffix(labelK, "automation") {
-							if strings.HasSuffix(labelV, "bash-type") {
+							if strings.HasSuffix(labelV, BashType) {
 								for annoK := range lib.Metadata.Annotations {
 									if strings.HasSuffix(annoK, "bash") {
+										fmt.Fprintf(center, "> %s: \"%s\"\n", lib.Metadata.Name, lib.Metadata.Description)
+										grabIt = true
+									}
+								}
+							} else if strings.HasSuffix(labelV, SsmDocType) {
+								for annoK := range lib.Metadata.Annotations {
+									if strings.Contains(annoK, "automation-doc-name") {
 										fmt.Fprintf(center, "> %s: \"%s\"\n", lib.Metadata.Name, lib.Metadata.Description)
 										grabIt = true
 									}
