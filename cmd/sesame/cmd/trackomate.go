@@ -8,6 +8,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type Trackomate struct {
 	parentSchedulerId     string
 	childrenSchedulerId   string
 	automationExecutionId string
+	maxPollCount          int
 }
 
 // trackomateCmd represents the trackomate command
@@ -50,7 +52,7 @@ var trackomateCmd = &cobra.Command{
 		}
 
 		reportChan := make(chan string, 10)
-		t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", automationExecutionId}
+		t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", automationExecutionId, maxPollCount}
 		t.conf()
 		t.thingDo()
 	},
@@ -411,7 +413,10 @@ func (trackomate *Trackomate) thingDo() {
 
 		defer trackomate.scheduler.Stop()
 
-		x := DefaultPendingPollCount
+		if trackomate.maxPollCount < 0 {
+			trackomate.maxPollCount = math.MaxInt
+		}
+		x := trackomate.maxPollCount
 		for i := 1; i < x-1; i++ {
 			if len(trackomate.scheduler.Tasks()) > 0 {
 				fmt.Println("Checking..")
@@ -529,7 +534,7 @@ func init() {
 	rootCmd.AddCommand(trackomateCmd)
 
 	trackomateCmd.Flags().StringVarP(&automationExecutionId, "id", "i", "", "Provide the AutomationExecutionId from an ssm start-automation-execution command")
-	trackomateCmd.Flags().IntVarP(&maxPollCount, "maxPollCount", "p", DefaultPendingPollCount, fmt.Sprintf("Provide a number of times to poll for pending tasks before giving up. Default: %d", DefaultPendingPollCount))
+	trackomateCmd.Flags().IntVarP(&maxPollCount, "maxPollCount", "p", DefaultPendingPollCount, fmt.Sprintf("Provide a number of times to poll for pending tasks before giving up. (-1) will poll until overal terminal status reached."))
 
 	err := trackomateCmd.MarkFlagRequired("id")
 	if err != nil {
