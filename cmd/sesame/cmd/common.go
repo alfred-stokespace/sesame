@@ -48,12 +48,7 @@ type SSMCommand struct {
 }
 
 func (ssmCommand *SSMCommand) conf() {
-	profile := getAwsProfile()
-	conf, err := config.LoadDefaultConfig(
-		context.TODO(),
-		config.WithRegion(getAwsRegion()),
-		config.WithSharedConfigProfile(profile),
-	)
+	conf, err := config.LoadDefaultConfig(context.Background())
 	exitOnError(err)
 	ssmCommand.svc = ssm.NewFromConfig(conf)
 	ssmCommand.svcEc2 = ec2.NewFromConfig(conf)

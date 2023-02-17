@@ -24,7 +24,7 @@ RUN set -ex && apk update && apk add --no-cache make git gcc libc-dev curl bash 
     cd /go/src/github.com/session-manager-plugin && \
     make release
 
-FROM alpine:latest
+FROM alpine:3.17.2
 RUN apk add --no-cache \
         ca-certificates \
         python3 \
