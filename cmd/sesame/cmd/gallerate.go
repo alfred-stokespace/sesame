@@ -258,7 +258,7 @@ var gallerateCmd = &cobra.Command{
 						} else {
 							id := searchForId[1]
 							reportChan := make(chan string, 10)
-							t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", id, -1}
+							t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", id, -1, 0}
 							t.conf()
 							t.thingDo()
 						}
@@ -304,7 +304,7 @@ var gallerateCmd = &cobra.Command{
 				execOutput, execError := gal.svc.StartAutomationExecution(context.Background(), execInput)
 				exitOnError(execError)
 				reportChan := make(chan string, 10)
-				t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", *execOutput.AutomationExecutionId, -1}
+				t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", *execOutput.AutomationExecutionId, -1, 0}
 				t.conf()
 				t.thingDo()
 			}

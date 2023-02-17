@@ -20,6 +20,7 @@ import (
 
 var automationExecutionId string
 var maxPollCount int
+var isExitCodeTiedToAutomationStatus bool
 
 const DefaultPendingPollCount = 40
 const ApiMax = 50
@@ -34,6 +35,7 @@ type Trackomate struct {
 	childrenSchedulerId   string
 	automationExecutionId string
 	maxPollCount          int
+	summaryStatusCode     int
 }
 
 // trackomateCmd represents the trackomate command
@@ -52,9 +54,9 @@ var trackomateCmd = &cobra.Command{
 		}
 
 		reportChan := make(chan string, 10)
-		t := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", automationExecutionId, maxPollCount}
-		t.conf()
-		t.thingDo()
+		tracker := Trackomate{SSMCommand{}, maxRecords, &reportChan, tasks.New(), "", "", automationExecutionId, maxPollCount, 0}
+		tracker.conf()
+		tracker.thingDo()
 	},
 }
 
@@ -125,6 +127,7 @@ func (trackomate *Trackomate) checkParent() ComplexStatus {
 				// this should only happen if AWS adds a status we didn't account for, or we have a bug!
 				cState.IsEndState = true
 				cState.IsEndStateSuccess = false
+				trackomate.summaryStatusCode = 1
 			}
 			return cState
 		}
@@ -364,6 +367,7 @@ func (trackomate *Trackomate) checkChildren(executionId string) {
 		if execs.allComplete {
 			trackomate.scheduler.Del(trackomate.childrenSchedulerId)
 			*trackomate.reportChan <- "DONE"
+			trackomate.summaryStatusCode = len(execs.failed)
 		}
 	}
 }
@@ -396,19 +400,23 @@ func (trackomate *Trackomate) thingDo() {
 	//     report status from either parent or child
 	//     exit on failure
 
-	endState := trackomate.checkParent()
-	if !endState.IsEndState {
+	parentEndState := trackomate.checkParent()
+	if !parentEndState.IsEndState {
 		trackomate.parentSchedulerId = trackomate.scheduleParent()
 		trackomate.childrenSchedulerId = trackomate.scheduleChildren()
 	}
 
-	if endState.IsEndState && endState.IsEndStateSuccess {
-		_, err := fmt.Fprintf(os.Stdout, "PARENT: automation-id=[%s]: Success!\n", trackomate.automationExecutionId)
-		exitOnError(err)
-		trackomate.checkChildren(trackomate.automationExecutionId)
+	if parentEndState.IsEndState {
+		if parentEndState.IsEndStateSuccess {
+			_, err := fmt.Fprintf(os.Stdout, "PARENT: automation-id=[%s]: Success!\n", trackomate.automationExecutionId)
+			exitOnError(err)
+			trackomate.checkChildren(trackomate.automationExecutionId)
+		} else {
+			trackomate.summaryStatusCode = 1
+		}
 	}
 
-	if !endState.IsEndState {
+	if !parentEndState.IsEndState {
 		// Start the Scheduler
 
 		defer trackomate.scheduler.Stop()
@@ -433,6 +441,13 @@ func (trackomate *Trackomate) thingDo() {
 			}
 		}
 		fmt.Println("Stopping")
+	}
+	trackomate.exitCheck()
+}
+
+func (trackomate *Trackomate) exitCheck() {
+	if isExitCodeTiedToAutomationStatus {
+		os.Exit(trackomate.summaryStatusCode)
 	}
 }
 
@@ -535,6 +550,7 @@ func init() {
 
 	trackomateCmd.Flags().StringVarP(&automationExecutionId, "id", "i", "", "Provide the AutomationExecutionId from an ssm start-automation-execution command")
 	trackomateCmd.Flags().IntVarP(&maxPollCount, "maxPollCount", "p", DefaultPendingPollCount, fmt.Sprintf("Provide a number of times to poll for pending tasks before giving up. (-1) will poll until overal terminal status reached."))
+	trackomateCmd.Flags().BoolVarP(&isExitCodeTiedToAutomationStatus, "tieAutomationStatusToExitCode", "e", false, fmt.Sprintf("-e=true should be used if you want a calling script to know there was a failure in the automation execution (default: false)."))
 
 	err := trackomateCmd.MarkFlagRequired("id")
 	if err != nil {
